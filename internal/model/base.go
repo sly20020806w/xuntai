@@ -4,7 +4,7 @@ package model
 
 type User struct {
 	ID           uint   `gorm:"primaryKey"`
-	Name         string `gorm:"size:64;not null"`
+	Name         string `gorm:"size:64;not null;uniqueIndex"`
 	PasswordHash string `gorm:"size:255"`
 	Roles        []Role `gorm:"many2many:base_user_roles;"`
 }
@@ -13,7 +13,7 @@ func (User) TableName() string { return "base_users" }
 
 type Role struct {
 	ID    uint   `gorm:"primaryKey"`
-	Name  string `gorm:"size:64;not null"`
+	Name  string `gorm:"size:64;not null;uniqueIndex"`
 	Menus []Menu `gorm:"many2many:base_role_menus;"`
 	APIs  []API  `gorm:"many2many:base_role_apis;"`
 }

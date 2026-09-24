@@ -1,4 +1,5 @@
 /bin/
 *.exe
+/data/
 demo/node_modules/
 demo/dist/

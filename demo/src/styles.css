@@ -205,6 +205,22 @@ select:focus-visible {
   color: var(--muted);
 }
 
+.login {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 14px;
+}
+
+.login input {
+  font: inherit;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: white;
+}
+
 table {
   width: 100%;
   border-collapse: collapse;

@@ -24,6 +24,10 @@ const currentId = ref(modules.some((item) => item.id === requested) ? requested 
 const nodeId = ref("order");
 const audience = ref("admin");
 const ticketRows = ref(seedTickets.map((item) => ({ ...item })));
+const loginName = ref("周宁");
+const loginPassword = ref("xuntai-dev");
+const loginError = ref("");
+const session = ref(null);
 
 const current = computed(() => modules.find((item) => item.id === currentId.value));
 const node = computed(() => tree.find((item) => item.id === nodeId.value));
@@ -39,6 +43,32 @@ const releaseRows = computed(() => visibleRecords(releases, nodeId.value));
 function approve(id) {
   const row = ticketRows.value.find((item) => item.id === id);
   if (row && row.status === "pending_approve") row.status = "pending_action";
+}
+
+async function login() {
+  loginError.value = "";
+  try {
+    const res = await fetch("/api/base/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: loginName.value, password: loginPassword.value }),
+    });
+    if (!res.ok) {
+      loginError.value = "账号或密码不对";
+      return;
+    }
+    const data = await res.json();
+    const me = await fetch("/api/base/me", {
+      headers: { Authorization: `Bearer ${data.token}` },
+    });
+    if (!me.ok) {
+      loginError.value = "登录状态没有换成菜单";
+      return;
+    }
+    session.value = await me.json();
+  } catch {
+    loginError.value = "登录服务没有启动";
+  }
 }
 </script>
 
@@ -93,6 +123,13 @@ function approve(id) {
 
       <section class="content">
         <template v-if="currentId === 'base'">
+          <form class="login" @submit.prevent="login">
+            <input v-model="loginName" aria-label="姓名" />
+            <input v-model="loginPassword" type="password" aria-label="密码" />
+            <button type="submit">登录</button>
+            <span v-if="session">{{ session.name }} 可见 {{ session.menus.map((item) => item.name).join("、") }}</span>
+            <span v-else-if="loginError">{{ loginError }}</span>
+          </form>
           <p class="note">菜单和接口按角色放开。林夏看不到集群节点操作。</p>
           <div class="split">
             <div>

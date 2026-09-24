@@ -3,7 +3,8 @@ package httpserver
 import (
 	"github.com/gin-gonic/gin"
 
-	"xuntai/internal/api/base"
+	"xuntai/internal/access"
+	apibase "xuntai/internal/api/base"
 	"xuntai/internal/api/cicd"
 	"xuntai/internal/api/db"
 	"xuntai/internal/api/k8s"
@@ -13,12 +14,27 @@ import (
 	"xuntai/internal/api/tree"
 )
 
-func New() *gin.Engine {
+type Deps struct {
+	Base apibase.Deps
+}
+
+func New(deps Deps) *gin.Engine {
 	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Header("Access-Control-Allow-Origin", "http://127.0.0.1:5173")
+		c.Header("Access-Control-Allow-Headers", "Authorization, Content-Type")
+		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS")
+		if c.Request.Method == "OPTIONS" {
+			c.AbortWithStatus(204)
+			return
+		}
+		c.Next()
+	})
+	r.Use(access.Middleware(deps.Base.Secret, deps.Base.Gate))
 	r.GET("/healthz", func(c *gin.Context) {
 		c.JSON(200, gin.H{"status": "ok"})
 	})
-	base.Register(r.Group("/api/base"))
+	apibase.Register(r.Group("/api/base"), deps.Base)
 	tree.Register(r.Group("/api/tree"))
 	ticket.Register(r.Group("/api/ticket"))
 	task.Register(r.Group("/api/task"))
@@ -29,6 +45,6 @@ func New() *gin.Engine {
 	return r
 }
 
-func Run(addr string) error {
-	return New().Run(addr)
+func Run(addr string, deps Deps) error {
+	return New(deps).Run(addr)
 }

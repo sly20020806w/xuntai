@@ -13,7 +13,7 @@ func TestHealthz(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	rec := httptest.NewRecorder()
-	New().ServeHTTP(rec, req)
+	New(Deps{}).ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("状态码 = %d", rec.Code)
 	}
@@ -28,7 +28,7 @@ func TestHealthz(t *testing.T) {
 
 func TestModuleRoutesAreMounted(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	engine := New()
+	engine := New(Deps{})
 	routes := engine.Routes()
 	found := map[string]bool{}
 	for _, route := range routes {
