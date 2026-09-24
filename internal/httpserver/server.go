@@ -22,6 +22,7 @@ type Deps struct {
 	Monitor monitor.Deps
 	K8s     k8s.Deps
 	Cicd    cicd.Deps
+	Db      db.Deps
 }
 
 func New(deps Deps) *gin.Engine {
@@ -47,7 +48,7 @@ func New(deps Deps) *gin.Engine {
 	monitor.Register(r.Group("/api/monitor"), deps.Monitor)
 	k8s.Register(r.Group("/api/k8s"), deps.K8s)
 	cicd.Register(r.Group("/api/cicd"), deps.Cicd)
-	db.Register(r.Group("/api/db"))
+	db.Register(r.Group("/api/db"), deps.Db)
 	return r
 }
 

@@ -12,6 +12,7 @@ import (
 	"xuntai/internal/access"
 	apibase "xuntai/internal/api/base"
 	apicicd "xuntai/internal/api/cicd"
+	apidb "xuntai/internal/api/db"
 	apik8s "xuntai/internal/api/k8s"
 	apimonitor "xuntai/internal/api/monitor"
 	apitask "xuntai/internal/api/task"
@@ -20,6 +21,7 @@ import (
 	"xuntai/internal/base"
 	"xuntai/internal/cicd"
 	"xuntai/internal/config"
+	dbmod "xuntai/internal/db"
 	"xuntai/internal/httpserver"
 	"xuntai/internal/k8s"
 	"xuntai/internal/model"
@@ -91,6 +93,13 @@ func main() {
 	if cicdReady {
 		log.Printf("已补上发布示例")
 	}
+	dbReady, err := dbmod.Seed(db)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if dbReady {
+		log.Printf("已补上数据库示例")
+	}
 	gate := access.New()
 	if err := gate.Reload(db); err != nil {
 		log.Fatal(err)
@@ -103,6 +112,7 @@ func main() {
 		Monitor: apimonitor.Deps{DB: db},
 		K8s:     apik8s.Deps{DB: db},
 		Cicd:    apicicd.Deps{DB: db},
+		Db:      apidb.Deps{DB: db},
 	}); err != nil {
 		log.Fatal(err)
 	}

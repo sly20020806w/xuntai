@@ -68,6 +68,23 @@ const releaseTag = ref("");
 const releaseEnv = ref("生产");
 const releaseTicketId = ref("");
 const releaseError = ref("");
+const liveDb = ref([]);
+const liveBackups = ref([]);
+const liveRestores = ref([]);
+const dbNodeId = ref("");
+const dbName = ref("");
+const dbHost = ref("");
+const dbPort = ref(3306);
+const dbVersion = ref("8.0");
+const dbRole = ref("从");
+const dbMasterId = ref("");
+const dbError = ref("");
+const backupInstanceId = ref("");
+const backupKind = ref("全量");
+const backupKeep = ref(7);
+const restoreBackupId = ref("");
+const restoreInstanceId = ref("");
+const restoreTicketId = ref("");
 
 const current = computed(() => modules.find((item) => item.id === currentId.value));
 const node = computed(() => tree.find((item) => item.id === nodeId.value));
@@ -89,6 +106,8 @@ const jobRows = computed(() => visibleRecords(jobs, nodeId.value));
 const alertRows = computed(() => visibleRecords(alerts, nodeId.value));
 const appRows = computed(() => visibleRecords(apps, nodeId.value));
 const releaseRows = computed(() => visibleRecords(releases, nodeId.value));
+const dbHosts = computed(() => liveMachines.value.filter((item) => String(item.nodeId) === dbNodeId.value));
+const dbMasters = computed(() => liveDb.value.filter((item) => String(item.nodeId) === dbNodeId.value && item.role === "主"));
 
 function approve(id) {
   const row = ticketRows.value.find((item) => item.id === id);
@@ -123,6 +142,7 @@ async function login() {
     await loadMonitor();
     await loadK8s();
     await loadReleases();
+    await loadDb();
   } catch {
     loginError.value = "登录服务没有启动";
   }
@@ -578,6 +598,139 @@ function stageClass(order, stage) {
   return current && current.name === stage.name ? "now" : "";
 }
 
+async function loadDb() {
+  if (!token.value) return;
+  dbError.value = "";
+  try {
+    const headers = { Authorization: `Bearer ${token.value}` };
+    const [instancesRes, backupsRes, restoresRes] = await Promise.all([
+      fetch("/api/db/instances", { headers }),
+      fetch("/api/db/backups", { headers }),
+      fetch("/api/db/restores", { headers }),
+    ]);
+    if (!instancesRes.ok || !backupsRes.ok || !restoresRes.ok) {
+      dbError.value = "数据库没有读出来";
+      return;
+    }
+    liveDb.value = await instancesRes.json();
+    liveBackups.value = await backupsRes.json();
+    liveRestores.value = await restoresRes.json();
+    if (!liveLeaves.value.some((item) => String(item.id) === dbNodeId.value)) {
+      const order = liveLeaves.value.find((item) => item.name === "订单");
+      dbNodeId.value = String((order || liveLeaves.value[0] || {}).id || "");
+    }
+    const hosts = dbHosts.value;
+    if (!hosts.some((item) => item.ip === dbHost.value)) {
+      dbHost.value = hosts[0] ? hosts[0].ip : "";
+    }
+    const masters = dbMasters.value;
+    if (!masters.some((item) => String(item.id) === dbMasterId.value)) {
+      dbMasterId.value = masters[0] ? String(masters[0].id) : "";
+    }
+    if (!liveDb.value.some((item) => String(item.id) === backupInstanceId.value)) {
+      const pay = liveDb.value.find((item) => item.name === "支付主库");
+      backupInstanceId.value = String((pay || liveDb.value[0] || {}).id || "");
+    }
+    if (!liveBackups.value.some((item) => String(item.id) === restoreBackupId.value)) {
+      restoreBackupId.value = String((liveBackups.value[0] || {}).id || "");
+    }
+    if (!liveDb.value.some((item) => String(item.id) === restoreInstanceId.value)) {
+      const slave = liveDb.value.find((item) => item.role === "从");
+      restoreInstanceId.value = String((slave || liveDb.value[0] || {}).id || "");
+    }
+  } catch {
+    dbError.value = "登录服务没有启动";
+  }
+}
+
+async function createDbInstance() {
+  dbError.value = "";
+  if (!dbName.value.trim()) {
+    dbError.value = "先写实例名";
+    return;
+  }
+  try {
+    const res = await fetch("/api/db/instances", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token.value}`,
+      },
+      body: JSON.stringify({
+        name: dbName.value.trim(),
+        treeNodeId: Number(dbNodeId.value),
+        host: dbHost.value,
+        port: Number(dbPort.value) || 3306,
+        version: dbVersion.value.trim(),
+        role: dbRole.value,
+        masterId: dbRole.value === "从" ? Number(dbMasterId.value) || 0 : 0,
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      dbError.value = data.error || "实例没有建成";
+      return;
+    }
+    dbName.value = "";
+    await loadDb();
+  } catch {
+    dbError.value = "登录服务没有启动";
+  }
+}
+
+async function createBackup() {
+  dbError.value = "";
+  try {
+    const res = await fetch("/api/db/backups", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token.value}`,
+      },
+      body: JSON.stringify({
+        instanceId: Number(backupInstanceId.value),
+        kind: backupKind.value,
+        keep: Number(backupKeep.value) || 7,
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      dbError.value = data.error || "备份没有建成";
+      return;
+    }
+    await loadDb();
+  } catch {
+    dbError.value = "登录服务没有启动";
+  }
+}
+
+async function createRestore() {
+  dbError.value = "";
+  try {
+    const res = await fetch("/api/db/restores", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token.value}`,
+      },
+      body: JSON.stringify({
+        backupId: Number(restoreBackupId.value),
+        instanceId: Number(restoreInstanceId.value),
+        ticketId: Number(restoreTicketId.value) || 0,
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      dbError.value = data.error || "还原没有建成";
+      return;
+    }
+    restoreTicketId.value = "";
+    await loadDb();
+  } catch {
+    dbError.value = "登录服务没有启动";
+  }
+}
+
 watch(currentId, (id) => {
   if (id === "tree" || id === "ticket" || id === "task" || id === "monitor") loadTree();
   if (id === "ticket") loadTickets();
@@ -585,6 +738,7 @@ watch(currentId, (id) => {
   if (id === "monitor") loadMonitor();
   if (id === "k8s") loadK8s();
   if (id === "cicd") loadReleases();
+  if (id === "db") loadDb();
 });
 </script>
 
@@ -1030,11 +1184,98 @@ watch(currentId, (id) => {
           </template>
         </template>
 
-        <template v-else>
-          <div class="empty">
-            <h2>这一层先空着</h2>
+        <template v-else-if="currentId === 'db'">
+          <template v-if="session">
+            <p class="note">只登记叶子上的 MySQL。主从记的是指向关系，复制延迟不在这里造，口令也不入库。备份只接受 xtrabackup。还原要有一张已审批、并且落在同一个叶子上的工单，登记之后也不会真的去还原。</p>
+            <form class="login" @submit.prevent="createDbInstance">
+              <select v-model="dbNodeId" aria-label="节点" @change="dbHost = (dbHosts[0] || {}).ip || ''; dbMasterId = (dbMasters[0] || {}).id ? String(dbMasters[0].id) : ''">
+                <option v-for="item in liveLeaves" :key="item.id" :value="String(item.id)">{{ item.name }}</option>
+              </select>
+              <input v-model="dbName" aria-label="实例名" placeholder="实例名" />
+              <select v-model="dbHost" aria-label="机器">
+                <option v-for="item in dbHosts" :key="item.id" :value="item.ip">{{ item.ip }}</option>
+              </select>
+              <input v-model="dbPort" aria-label="端口" placeholder="端口" />
+              <input v-model="dbVersion" aria-label="版本" placeholder="版本" />
+              <select v-model="dbRole" aria-label="角色">
+                <option value="主">主</option>
+                <option value="从">从</option>
+              </select>
+              <select v-if="dbRole === '从'" v-model="dbMasterId" aria-label="主库">
+                <option v-for="item in dbMasters" :key="item.id" :value="String(item.id)">{{ item.name }}</option>
+              </select>
+              <button type="submit">登记实例</button>
+            </form>
+            <table>
+              <thead>
+                <tr><th>实例</th><th>节点</th><th>地址</th><th>版本</th><th>角色</th><th>主库</th><th>复制</th></tr>
+              </thead>
+              <tbody>
+                <tr v-for="row in liveDb" :key="row.id">
+                  <td>{{ row.name }}</td>
+                  <td>{{ row.nodeName }}</td>
+                  <td>{{ row.host }}:{{ row.port }}</td>
+                  <td>{{ row.version }}</td>
+                  <td>{{ row.role }}</td>
+                  <td>{{ row.masterName }}</td>
+                  <td><span class="lamp copper"><i></i>未接入</span></td>
+                </tr>
+              </tbody>
+            </table>
+            <form class="login" @submit.prevent="createBackup">
+              <select v-model="backupInstanceId" aria-label="备份实例">
+                <option v-for="item in liveDb" :key="item.id" :value="String(item.id)">{{ item.name }}</option>
+              </select>
+              <select v-model="backupKind" aria-label="备份类型">
+                <option value="全量">全量</option>
+                <option value="增量">增量</option>
+              </select>
+              <input v-model="backupKeep" aria-label="保留份数" placeholder="保留份数" />
+              <button type="submit">登记备份</button>
+            </form>
+            <table>
+              <thead>
+                <tr><th>实例</th><th>类型</th><th>工具</th><th>保留</th><th>状态</th></tr>
+              </thead>
+              <tbody>
+                <tr v-for="row in liveBackups" :key="row.id">
+                  <td>{{ row.instanceName }}</td>
+                  <td>{{ row.kind }}</td>
+                  <td>{{ row.tool }}</td>
+                  <td>{{ row.keep }}</td>
+                  <td>{{ row.status }}</td>
+                </tr>
+              </tbody>
+            </table>
+            <form class="login" @submit.prevent="createRestore">
+              <select v-model="restoreBackupId" aria-label="备份">
+                <option v-for="item in liveBackups" :key="item.id" :value="String(item.id)">{{ item.instanceName }} · {{ item.kind }}</option>
+              </select>
+              <select v-model="restoreInstanceId" aria-label="还原到">
+                <option v-for="item in liveDb" :key="item.id" :value="String(item.id)">{{ item.name }}</option>
+              </select>
+              <input v-model="restoreTicketId" aria-label="工单号" placeholder="工单号" />
+              <button type="submit">登记还原</button>
+              <span v-if="dbError">{{ dbError }}</span>
+            </form>
+            <table v-if="liveRestores.length">
+              <thead>
+                <tr><th>备份</th><th>实例</th><th>工单</th><th>状态</th></tr>
+              </thead>
+              <tbody>
+                <tr v-for="row in liveRestores" :key="row.id">
+                  <td>{{ row.backupId }}</td>
+                  <td>{{ row.instanceName }}</td>
+                  <td>{{ row.ticketId }}</td>
+                  <td>{{ row.status }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </template>
+          <div v-else class="empty">
+            <h2>登录后登记数据库</h2>
             <p>
-              数据库模块的目标是 Kubernetes 上的 MySQL 和管理页面。样稿里只留位置。备份、主从和进集群的做法还没有定稿，所以这里不摆假的库表。
+              这一层只登记叶子上的 MySQL、主从指向和 xtrabackup 备份。复制延迟不在这里造。还原要等工单审批通过。代理、读写分离和放进集群，课还没讲到。
             </p>
           </div>
         </template>

@@ -45,7 +45,7 @@ export const modules = [
     id: "db",
     index: "8",
     name: "数据库",
-    summary: "位置先留着，这一层还没有定稿。",
+    summary: "登记叶子上的 MySQL。主从不造延迟，还原走工单。",
   },
 ];
 

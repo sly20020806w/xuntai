@@ -41,6 +41,9 @@ func TestMigrateCreatesModuleTables(t *testing.T) {
 		"cicd_deploy_items",
 		"cicd_orders",
 		"cicd_stages",
+		"db_backups",
+		"db_instances",
+		"db_restores",
 		"k8s_apps",
 		"k8s_clusters",
 		"k8s_instances",
@@ -64,10 +67,5 @@ func TestMigrateCreatesModuleTables(t *testing.T) {
 	}
 	if !slices.Equal(names, want) {
 		t.Fatalf("表 = %v\n期望 %v", names, want)
-	}
-	for _, name := range names {
-		if len(name) >= 3 && name[:3] == "db_" {
-			t.Fatalf("数据库模块不应建表: %s", name)
-		}
 	}
 }

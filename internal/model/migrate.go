@@ -2,7 +2,7 @@ package model
 
 import "gorm.io/gorm"
 
-// Models 是当前要建的表。数据库模块故意不在这里。
+// Models 是当前要建的表。
 func Models() []any {
 	return []any{
 		&User{},
@@ -31,6 +31,9 @@ func Models() []any {
 		&DeployItem{},
 		&ReleaseOrder{},
 		&ReleaseStage{},
+		&Instance{},
+		&Backup{},
+		&Restore{},
 	}
 }
 
