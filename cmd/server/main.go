@@ -11,12 +11,14 @@ import (
 
 	"xuntai/internal/access"
 	apibase "xuntai/internal/api/base"
+	apitask "xuntai/internal/api/task"
 	apiticket "xuntai/internal/api/ticket"
 	apitree "xuntai/internal/api/tree"
 	"xuntai/internal/base"
 	"xuntai/internal/config"
 	"xuntai/internal/httpserver"
 	"xuntai/internal/model"
+	"xuntai/internal/task"
 	"xuntai/internal/ticket"
 	"xuntai/internal/tree"
 )
@@ -55,6 +57,13 @@ func main() {
 	if ticketReady {
 		log.Printf("已补上工单示例")
 	}
+	taskReady, err := task.Seed(db)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if taskReady {
+		log.Printf("已补上任务示例")
+	}
 	gate := access.New()
 	if err := gate.Reload(db); err != nil {
 		log.Fatal(err)
@@ -63,6 +72,7 @@ func main() {
 		Base:   apibase.Deps{DB: db, Secret: cfg.JWTSecret, Gate: gate},
 		Tree:   apitree.Deps{DB: db},
 		Ticket: apiticket.Deps{DB: db},
+		Task:   apitask.Deps{DB: db},
 	}); err != nil {
 		log.Fatal(err)
 	}

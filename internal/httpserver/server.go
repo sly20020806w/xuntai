@@ -18,6 +18,7 @@ type Deps struct {
 	Base   apibase.Deps
 	Tree   tree.Deps
 	Ticket ticket.Deps
+	Task   task.Deps
 }
 
 func New(deps Deps) *gin.Engine {
@@ -39,7 +40,7 @@ func New(deps Deps) *gin.Engine {
 	apibase.Register(r.Group("/api/base"), deps.Base)
 	tree.Register(r.Group("/api/tree"), deps.Tree)
 	ticket.Register(r.Group("/api/ticket"), deps.Ticket)
-	task.Register(r.Group("/api/task"))
+	task.Register(r.Group("/api/task"), deps.Task)
 	monitor.Register(r.Group("/api/monitor"))
 	k8s.Register(r.Group("/api/k8s"))
 	cicd.Register(r.Group("/api/cicd"))

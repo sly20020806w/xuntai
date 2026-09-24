@@ -40,6 +40,13 @@ const ticketTemplates = ref([]);
 const ticketTitle = ref("");
 const ticketNodeId = ref("");
 const ticketError = ref("");
+const liveJobs = ref([]);
+const liveScripts = ref([]);
+const taskName = ref("");
+const taskNodeId = ref("");
+const taskScriptId = ref("");
+const taskBatch = ref(1);
+const taskError = ref("");
 
 const current = computed(() => modules.find((item) => item.id === currentId.value));
 const node = computed(() => tree.find((item) => item.id === nodeId.value));
@@ -48,6 +55,13 @@ const machineRows = computed(() => visibleRecords(machines, nodeId.value));
 const liveLeaves = computed(() => liveNodes.value.filter((item) => item.isLeaf));
 const shownMachines = computed(() => (session.value ? liveMachines.value : machineRows.value));
 const shownTickets = computed(() => (session.value ? liveTickets.value : ticketView.value));
+const shownTasks = computed(() => (session.value ? liveJobs.value : taskRows.value));
+const taskStateText = {
+  running: "执行中",
+  paused: "已暂停",
+  finished: "已完成",
+  pending: "未开始",
+};
 const ticketView = computed(() => visibleRecords(ticketRows.value, nodeId.value));
 const taskRows = computed(() => visibleRecords(tasks, nodeId.value));
 const jobRows = computed(() => visibleRecords(jobs, nodeId.value));
@@ -84,6 +98,7 @@ async function login() {
     session.value = await me.json();
     await loadTree();
     await loadTickets();
+    await loadTasks();
   } catch {
     loginError.value = "登录服务没有启动";
   }
@@ -226,9 +241,105 @@ async function decide(id, action) {
   }
 }
 
+async function loadTasks() {
+  if (!token.value) return;
+  taskError.value = "";
+  try {
+    const headers = { Authorization: `Bearer ${token.value}` };
+    const [jobsRes, scriptsRes] = await Promise.all([
+      fetch("/api/task/jobs", { headers }),
+      fetch("/api/task/scripts", { headers }),
+    ]);
+    if (!jobsRes.ok || !scriptsRes.ok) {
+      taskError.value = "任务没有读出来";
+      return;
+    }
+    liveJobs.value = await jobsRes.json();
+    liveScripts.value = await scriptsRes.json();
+    if (!liveNodes.value.length) await loadTree();
+    if (!liveNodes.value.some((item) => String(item.id) === taskNodeId.value)) {
+      const observe = liveNodes.value.find((item) => item.name === "可观测");
+      taskNodeId.value = String((observe || liveNodes.value[0] || {}).id || "");
+    }
+    if (!liveScripts.value.some((item) => String(item.ID) === taskScriptId.value)) {
+      taskScriptId.value = liveScripts.value[0] ? String(liveScripts.value[0].ID) : "";
+    }
+  } catch {
+    taskError.value = "登录服务没有启动";
+  }
+}
+
+async function createTask() {
+  taskError.value = "";
+  if (!taskName.value.trim()) {
+    taskError.value = "先写任务名";
+    return;
+  }
+  try {
+    const res = await fetch("/api/task/jobs", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token.value}`,
+      },
+      body: JSON.stringify({
+        name: taskName.value.trim(),
+        scriptId: Number(taskScriptId.value),
+        treeNodeId: Number(taskNodeId.value),
+        batchSize: Number(taskBatch.value) || 1,
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      taskError.value = data.error || "任务没有下发";
+      return;
+    }
+    taskName.value = "";
+    await loadTasks();
+  } catch {
+    taskError.value = "登录服务没有启动";
+  }
+}
+
+async function taskAct(id, action, body) {
+  taskError.value = "";
+  try {
+    const res = await fetch(`/api/task/jobs/${id}/${action}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token.value}`,
+      },
+      body: body || "{}",
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      taskError.value = data.error || "任务没有改成";
+      return;
+    }
+    await loadTasks();
+  } catch {
+    taskError.value = "登录服务没有启动";
+  }
+}
+
+function taskBatchText(row) {
+  return row.batchSize ? `每轮 ${row.batchSize} 台` : row.batch;
+}
+
+function taskProgress(row) {
+  if (row.total != null && row.done != null && session.value) return `${row.done} / ${row.total}`;
+  return row.progress;
+}
+
+function taskState(row) {
+  return taskStateText[row.status] || row.state;
+}
+
 watch(currentId, (id) => {
-  if (id === "tree" || id === "ticket") loadTree();
+  if (id === "tree" || id === "ticket" || id === "task") loadTree();
   if (id === "ticket") loadTickets();
+  if (id === "task") loadTasks();
 });
 </script>
 
@@ -420,18 +531,43 @@ watch(currentId, (id) => {
         </template>
 
         <template v-else-if="currentId === 'task'">
-          <p class="note">巡检是同一条链路加上基线，不是另一套系统。</p>
+          <form v-if="session" class="login" @submit.prevent="createTask">
+            <select v-model="taskNodeId" aria-label="节点">
+              <option v-for="item in liveNodes" :key="item.id" :value="String(item.id)">{{ item.name }}</option>
+            </select>
+            <select v-model="taskScriptId" aria-label="脚本">
+              <option v-for="item in liveScripts" :key="item.ID" :value="String(item.ID)">{{ item.Name }}</option>
+            </select>
+            <input v-model="taskName" aria-label="任务名" placeholder="任务名" />
+            <input v-model="taskBatch" aria-label="每轮台数" type="number" min="1" />
+            <button type="submit">下发</button>
+            <span v-if="taskError">{{ taskError }}</span>
+          </form>
+          <p v-if="session" class="note">同一条命令发到节点下的机器，每轮只放出并发那么多台，同一台不会再记一行。巡检是这条链路加上基线。代理还没接上，收回只是把结果记回来。</p>
+          <p v-else class="note">巡检是同一条链路加上基线，不是另一套系统。</p>
           <table>
             <thead>
-              <tr><th>任务</th><th>节点</th><th>并发</th><th>进度</th><th>状态</th></tr>
+              <tr><th>任务</th><th>节点</th><th>并发</th><th>进度</th><th>状态</th><th v-if="session"></th></tr>
             </thead>
             <tbody>
-              <tr v-for="row in taskRows" :key="row.name">
+              <tr v-for="row in shownTasks" :key="row.id || row.name">
                 <td>{{ row.name }}</td>
-                <td>{{ labelOf(row.nodeId) }}</td>
-                <td>{{ row.batch }}</td>
-                <td>{{ row.progress }}</td>
-                <td>{{ row.state }}</td>
+                <td>{{ row.nodeName || labelOf(row.nodeId) }}</td>
+                <td>{{ taskBatchText(row) }}</td>
+                <td>{{ taskProgress(row) }}</td>
+                <td>{{ taskState(row) }}</td>
+                <td v-if="session">
+                  <div v-if="session" class="row-actions">
+                    <button
+                      v-if="row.status === 'running' && row.issued && row.issued.length"
+                      @click="taskAct(row.id, 'results', JSON.stringify({ hostIp: row.issued[0], status: 'success', output: '已收回' }))"
+                    >
+                      收回一台
+                    </button>
+                    <button v-if="row.status === 'running'" @click="taskAct(row.id, 'pause')">暂停</button>
+                    <button v-if="row.status === 'paused'" @click="taskAct(row.id, 'resume')">继续</button>
+                  </div>
+                </td>
               </tr>
             </tbody>
           </table>
