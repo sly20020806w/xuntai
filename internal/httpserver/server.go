@@ -16,6 +16,7 @@ import (
 
 type Deps struct {
 	Base apibase.Deps
+	Tree tree.Deps
 }
 
 func New(deps Deps) *gin.Engine {
@@ -35,7 +36,7 @@ func New(deps Deps) *gin.Engine {
 		c.JSON(200, gin.H{"status": "ok"})
 	})
 	apibase.Register(r.Group("/api/base"), deps.Base)
-	tree.Register(r.Group("/api/tree"))
+	tree.Register(r.Group("/api/tree"), deps.Tree)
 	ticket.Register(r.Group("/api/ticket"))
 	task.Register(r.Group("/api/task"))
 	monitor.Register(r.Group("/api/monitor"))

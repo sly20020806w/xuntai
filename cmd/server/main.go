@@ -11,10 +11,12 @@ import (
 
 	"xuntai/internal/access"
 	apibase "xuntai/internal/api/base"
+	apitree "xuntai/internal/api/tree"
 	"xuntai/internal/base"
 	"xuntai/internal/config"
 	"xuntai/internal/httpserver"
 	"xuntai/internal/model"
+	"xuntai/internal/tree"
 )
 
 func main() {
@@ -37,12 +39,20 @@ func main() {
 		}
 		log.Printf("已创建初始用户 周宁，密码 %s", password)
 	}
+	treeReady, err := tree.Seed(db, cfg.AdminPassword)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if treeReady {
+		log.Printf("已补上服务树示例，林夏、许衡、陈舟的密码与初始用户相同")
+	}
 	gate := access.New()
 	if err := gate.Reload(db); err != nil {
 		log.Fatal(err)
 	}
 	if err := httpserver.Run(cfg.HTTPAddr, httpserver.Deps{
 		Base: apibase.Deps{DB: db, Secret: cfg.JWTSecret, Gate: gate},
+		Tree: apitree.Deps{DB: db},
 	}); err != nil {
 		log.Fatal(err)
 	}

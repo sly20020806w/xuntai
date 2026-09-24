@@ -213,12 +213,17 @@ select:focus-visible {
   margin-bottom: 14px;
 }
 
-.login input {
+.login input,
+.login select {
   font: inherit;
   padding: 6px 8px;
   border: 1px solid var(--line);
   border-radius: 6px;
   background: white;
+}
+
+.content > table {
+  margin-bottom: 18px;
 }
 
 table {

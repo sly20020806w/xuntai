@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref } from "vue";
+import { computed, ref, watch } from "vue";
 import {
   alerts,
   apps,
@@ -28,11 +28,20 @@ const loginName = ref("周宁");
 const loginPassword = ref("xuntai-dev");
 const loginError = ref("");
 const session = ref(null);
+const token = ref("");
+const liveNodes = ref([]);
+const liveMachines = ref([]);
+const treeError = ref("");
+const machineName = ref("");
+const machineIP = ref("");
+const machineNodeId = ref("");
 
 const current = computed(() => modules.find((item) => item.id === currentId.value));
 const node = computed(() => tree.find((item) => item.id === nodeId.value));
 
 const machineRows = computed(() => visibleRecords(machines, nodeId.value));
+const liveLeaves = computed(() => liveNodes.value.filter((item) => item.isLeaf));
+const shownMachines = computed(() => (session.value ? liveMachines.value : machineRows.value));
 const ticketView = computed(() => visibleRecords(ticketRows.value, nodeId.value));
 const taskRows = computed(() => visibleRecords(tasks, nodeId.value));
 const jobRows = computed(() => visibleRecords(jobs, nodeId.value));
@@ -65,11 +74,79 @@ async function login() {
       loginError.value = "登录状态没有换成菜单";
       return;
     }
+    token.value = data.token;
     session.value = await me.json();
+    await loadTree();
   } catch {
     loginError.value = "登录服务没有启动";
   }
 }
+
+async function loadTree() {
+  if (!token.value) return;
+  treeError.value = "";
+  try {
+    const headers = { Authorization: `Bearer ${token.value}` };
+    const [nodesRes, machinesRes] = await Promise.all([
+      fetch("/api/tree/nodes", { headers }),
+      fetch("/api/tree/machines", { headers }),
+    ]);
+    if (!nodesRes.ok || !machinesRes.ok) {
+      treeError.value = "服务树没有读出来";
+      return;
+    }
+    liveNodes.value = await nodesRes.json();
+    liveMachines.value = await machinesRes.json();
+    if (!liveLeaves.value.some((item) => String(item.id) === machineNodeId.value)) {
+      machineNodeId.value = liveLeaves.value[0] ? String(liveLeaves.value[0].id) : "";
+    }
+  } catch {
+    treeError.value = "登录服务没有启动";
+  }
+}
+
+async function bindMachine() {
+  treeError.value = "";
+  if (!machineName.value.trim()) {
+    treeError.value = "先写机器名";
+    return;
+  }
+  try {
+    const res = await fetch(`/api/tree/nodes/${machineNodeId.value}/machines`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token.value}`,
+      },
+      body: JSON.stringify({
+        name: machineName.value.trim(),
+        ip: machineIP.value.trim(),
+        vendor: "自建",
+        spec: "",
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      treeError.value = data.error || "机器没有挂上";
+      return;
+    }
+    machineName.value = "";
+    machineIP.value = "";
+    await loadTree();
+  } catch {
+    treeError.value = "登录服务没有启动";
+  }
+}
+
+function ownerText(item) {
+  return (item.owners || [])
+    .map((owner) => owner.name + (owner.kind === "rd" ? "（研发）" : ""))
+    .join("、");
+}
+
+watch(currentId, (id) => {
+  if (id === "tree") loadTree();
+});
 </script>
 
 <template>
@@ -165,20 +242,42 @@ async function login() {
         </template>
 
         <template v-else-if="currentId === 'tree'">
-          <p class="note">
-            {{ node.name }}的负责人是{{ node.owners.join("、") }}。只有叶子节点能绑机器。
-          </p>
+          <form v-if="session" class="login" @submit.prevent="bindMachine">
+            <select v-model="machineNodeId" aria-label="叶子节点">
+              <option v-for="item in liveLeaves" :key="item.id" :value="String(item.id)">{{ item.name }}</option>
+            </select>
+            <input v-model="machineName" aria-label="机器名" placeholder="机器名" />
+            <input v-model="machineIP" aria-label="地址" placeholder="地址" />
+            <button type="submit">挂到叶子</button>
+            <span v-if="treeError">{{ treeError }}</span>
+          </form>
+          <p v-if="session" class="note">只有叶子能挂机器。写操作认本节点或上级的运维负责人，研发负责人不能改。列表不按负责人收窄。</p>
+          <p v-else class="note">先在底座登录。{{ node.name }}的负责人是{{ node.owners.join("、") }}。只有叶子节点能挂机器。</p>
+          <h2 v-if="session" class="panel-title">节点</h2>
+          <table v-if="session">
+            <thead>
+              <tr><th>节点</th><th>叶子</th><th>负责人</th></tr>
+            </thead>
+            <tbody>
+              <tr v-for="item in liveNodes" :key="item.id">
+                <td>{{ item.level ? "· " : "" }}{{ item.name }}</td>
+                <td>{{ item.isLeaf ? "是" : "" }}</td>
+                <td>{{ ownerText(item) }}</td>
+              </tr>
+            </tbody>
+          </table>
+          <h2 class="panel-title">机器</h2>
           <table>
             <thead>
               <tr><th>机器</th><th>地址</th><th>来源</th><th>规格</th><th>节点</th></tr>
             </thead>
             <tbody>
-              <tr v-for="row in machineRows" :key="row.name">
+              <tr v-for="row in shownMachines" :key="row.id || row.name">
                 <td>{{ row.name }}</td>
                 <td>{{ row.ip }}</td>
                 <td>{{ row.vendor }}</td>
                 <td>{{ row.spec }}</td>
-                <td>{{ labelOf(row.nodeId) }}</td>
+                <td>{{ row.nodeName || labelOf(row.nodeId) }}</td>
               </tr>
             </tbody>
           </table>
