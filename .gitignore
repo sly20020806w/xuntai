@@ -1,0 +1,4 @@
+/bin/
+*.exe
+demo/node_modules/
+demo/dist/
