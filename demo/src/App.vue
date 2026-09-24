@@ -47,6 +47,14 @@ const taskNodeId = ref("");
 const taskScriptId = ref("");
 const taskBatch = ref(1);
 const taskError = ref("");
+const livePools = ref([]);
+const liveScrapeJobs = ref([]);
+const liveRules = ref([]);
+const scrapeName = ref("");
+const scrapePoolId = ref("");
+const scrapeNodeId = ref("");
+const scrapePort = ref(9100);
+const monitorError = ref("");
 
 const current = computed(() => modules.find((item) => item.id === currentId.value));
 const node = computed(() => tree.find((item) => item.id === nodeId.value));
@@ -99,6 +107,7 @@ async function login() {
     await loadTree();
     await loadTickets();
     await loadTasks();
+    await loadMonitor();
   } catch {
     loginError.value = "登录服务没有启动";
   }
@@ -336,10 +345,90 @@ function taskState(row) {
   return taskStateText[row.status] || row.state;
 }
 
+const alertState = { firing: "触发中", claimed: "已认领", silenced: "静默" };
+
+async function loadMonitor() {
+  if (!token.value) return;
+  monitorError.value = "";
+  try {
+    const headers = { Authorization: `Bearer ${token.value}` };
+    const [poolsRes, jobsRes, rulesRes] = await Promise.all([
+      fetch("/api/monitor/pools", { headers }),
+      fetch("/api/monitor/jobs", { headers }),
+      fetch("/api/monitor/rules", { headers }),
+    ]);
+    if (!poolsRes.ok || !jobsRes.ok || !rulesRes.ok) {
+      monitorError.value = "监控配置没有读出来";
+      return;
+    }
+    livePools.value = await poolsRes.json();
+    liveScrapeJobs.value = await jobsRes.json();
+    liveRules.value = await rulesRes.json();
+    if (!liveNodes.value.length) await loadTree();
+    if (!livePools.value.some((item) => String(item.id) === scrapePoolId.value)) {
+      const base = livePools.value.find((item) => item.name === "基础采集");
+      scrapePoolId.value = String((base || livePools.value[0] || {}).id || "");
+    }
+    if (!liveLeaves.value.some((item) => String(item.id) === scrapeNodeId.value)) {
+      const observe = liveLeaves.value.find((item) => item.name === "可观测");
+      scrapeNodeId.value = String((observe || liveLeaves.value[0] || {}).id || "");
+    }
+  } catch {
+    monitorError.value = "登录服务没有启动";
+  }
+}
+
+async function createScrapeJob() {
+  monitorError.value = "";
+  if (!scrapeName.value.trim()) {
+    monitorError.value = "先写任务名";
+    return;
+  }
+  try {
+    const res = await fetch("/api/monitor/jobs", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token.value}`,
+      },
+      body: JSON.stringify({
+        poolId: Number(scrapePoolId.value),
+        treeNodeId: Number(scrapeNodeId.value),
+        name: scrapeName.value.trim(),
+        discover: "tree",
+        port: Number(scrapePort.value),
+        metricsPath: "/metrics",
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      monitorError.value = data.error || "采集任务没有建成";
+      return;
+    }
+    scrapeName.value = "";
+    await loadMonitor();
+  } catch {
+    monitorError.value = "登录服务没有启动";
+  }
+}
+
+function discoverText(row) {
+  if (row.discover === "tree") return "服务树";
+  if (row.discover === "k8s") return "集群外";
+  return row.mode;
+}
+
+function targetText(row) {
+  if (row.discover === "tree") return `${row.nodeName} :${row.port}${row.metricsPath}`;
+  if (row.discover === "k8s") return "集群外认证";
+  return row.target;
+}
+
 watch(currentId, (id) => {
-  if (id === "tree" || id === "ticket" || id === "task") loadTree();
+  if (id === "tree" || id === "ticket" || id === "task" || id === "monitor") loadTree();
   if (id === "ticket") loadTickets();
   if (id === "task") loadTasks();
+  if (id === "monitor") loadMonitor();
 });
 </script>
 
@@ -574,11 +663,36 @@ watch(currentId, (id) => {
         </template>
 
         <template v-else-if="currentId === 'monitor'">
-          <p class="note">采集池共享同一份全局配置和远端写入。告警发给当天值班的人。</p>
+          <form v-if="session" class="login" @submit.prevent="createScrapeJob">
+            <select v-model="scrapePoolId" aria-label="采集池">
+              <option v-for="item in livePools" :key="item.id" :value="String(item.id)">{{ item.name }}</option>
+            </select>
+            <select v-model="scrapeNodeId" aria-label="叶子节点">
+              <option v-for="item in liveLeaves" :key="item.id" :value="String(item.id)">{{ item.name }}</option>
+            </select>
+            <input v-model="scrapeName" aria-label="任务名" placeholder="任务名" />
+            <input v-model="scrapePort" aria-label="端口" type="number" min="1" />
+            <button type="submit">挂到叶子</button>
+            <span v-if="monitorError">{{ monitorError }}</span>
+          </form>
+          <p v-if="session" class="note">采集池共用一份远端写入。服务树发现只挂叶子，规则用发送组编号找路由。配置从这里拉走，不往 Prometheus 推。认领和静默不在这里。</p>
+          <p v-else class="note">采集池共享同一份全局配置和远端写入。告警发给当天值班的人。</p>
           <div class="split">
             <div>
               <h2 class="panel-title">采集池</h2>
-              <table>
+              <table v-if="session">
+                <thead>
+                  <tr><th>池</th><th>告警</th><th>写入</th></tr>
+                </thead>
+                <tbody>
+                  <tr v-for="row in livePools" :key="row.id">
+                    <td>{{ row.name }}</td>
+                    <td>{{ row.supportAlert ? "产生" : "不产生" }}</td>
+                    <td>{{ row.remoteWrite }}</td>
+                  </tr>
+                </tbody>
+              </table>
+              <table v-else>
                 <thead>
                   <tr><th>池</th><th>范围</th><th>采集器</th><th>写入</th></tr>
                 </thead>
@@ -593,23 +707,37 @@ watch(currentId, (id) => {
               </table>
             </div>
             <div>
-              <h2 class="panel-title">这个节点上的任务</h2>
+              <h2 class="panel-title">采集任务</h2>
               <table>
                 <thead>
                   <tr><th>任务</th><th>发现</th><th>目标</th></tr>
                 </thead>
                 <tbody>
-                  <tr v-for="row in jobRows" :key="row.name">
+                  <tr v-for="row in (session ? liveScrapeJobs : jobRows)" :key="row.id || row.name">
                     <td>{{ row.name }}</td>
-                    <td>{{ row.mode }}</td>
-                    <td>{{ row.target }}</td>
+                    <td>{{ discoverText(row) }}</td>
+                    <td>{{ targetText(row) }}</td>
                   </tr>
                 </tbody>
               </table>
             </div>
           </div>
           <h2 class="panel-title">告警</h2>
-          <table>
+          <table v-if="session">
+            <thead>
+              <tr><th>规则</th><th>采集池</th><th>发送组</th><th>级别</th><th>状态</th></tr>
+            </thead>
+            <tbody>
+              <tr v-for="row in liveRules" :key="row.id">
+                <td>{{ row.name }}</td>
+                <td>{{ row.poolName }}</td>
+                <td>{{ row.sendGroupName }}</td>
+                <td>{{ row.level }}</td>
+                <td>{{ alertState[row.status] || "" }}</td>
+              </tr>
+            </tbody>
+          </table>
+          <table v-else>
             <thead>
               <tr><th>规则</th><th>节点</th><th>发送组</th><th>级别</th><th>状态</th></tr>
             </thead>

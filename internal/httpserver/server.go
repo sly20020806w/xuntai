@@ -15,10 +15,11 @@ import (
 )
 
 type Deps struct {
-	Base   apibase.Deps
-	Tree   tree.Deps
-	Ticket ticket.Deps
-	Task   task.Deps
+	Base    apibase.Deps
+	Tree    tree.Deps
+	Ticket  ticket.Deps
+	Task    task.Deps
+	Monitor monitor.Deps
 }
 
 func New(deps Deps) *gin.Engine {
@@ -41,7 +42,7 @@ func New(deps Deps) *gin.Engine {
 	tree.Register(r.Group("/api/tree"), deps.Tree)
 	ticket.Register(r.Group("/api/ticket"), deps.Ticket)
 	task.Register(r.Group("/api/task"), deps.Task)
-	monitor.Register(r.Group("/api/monitor"))
+	monitor.Register(r.Group("/api/monitor"), deps.Monitor)
 	k8s.Register(r.Group("/api/k8s"))
 	cicd.Register(r.Group("/api/cicd"))
 	db.Register(r.Group("/api/db"))

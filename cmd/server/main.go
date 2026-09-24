@@ -11,6 +11,7 @@ import (
 
 	"xuntai/internal/access"
 	apibase "xuntai/internal/api/base"
+	apimonitor "xuntai/internal/api/monitor"
 	apitask "xuntai/internal/api/task"
 	apiticket "xuntai/internal/api/ticket"
 	apitree "xuntai/internal/api/tree"
@@ -18,6 +19,7 @@ import (
 	"xuntai/internal/config"
 	"xuntai/internal/httpserver"
 	"xuntai/internal/model"
+	"xuntai/internal/monitor"
 	"xuntai/internal/task"
 	"xuntai/internal/ticket"
 	"xuntai/internal/tree"
@@ -64,15 +66,23 @@ func main() {
 	if taskReady {
 		log.Printf("已补上任务示例")
 	}
+	monitorReady, err := monitor.Seed(db)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if monitorReady {
+		log.Printf("已补上监控示例")
+	}
 	gate := access.New()
 	if err := gate.Reload(db); err != nil {
 		log.Fatal(err)
 	}
 	if err := httpserver.Run(cfg.HTTPAddr, httpserver.Deps{
-		Base:   apibase.Deps{DB: db, Secret: cfg.JWTSecret, Gate: gate},
-		Tree:   apitree.Deps{DB: db},
-		Ticket: apiticket.Deps{DB: db},
-		Task:   apitask.Deps{DB: db},
+		Base:    apibase.Deps{DB: db, Secret: cfg.JWTSecret, Gate: gate},
+		Tree:    apitree.Deps{DB: db},
+		Ticket:  apiticket.Deps{DB: db},
+		Task:    apitask.Deps{DB: db},
+		Monitor: apimonitor.Deps{DB: db},
 	}); err != nil {
 		log.Fatal(err)
 	}
