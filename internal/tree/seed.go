@@ -1,6 +1,8 @@
 package tree
 
 import (
+	"errors"
+
 	"xuntai/internal/base"
 	"xuntai/internal/model"
 
@@ -32,7 +34,7 @@ func Seed(db *gorm.DB, password string) (bool, error) {
 		return false, nil
 	}
 	if password == "" {
-		password = base.DefaultPassword
+		return false, errors.New("必须设置 XUNTAI_ADMIN_PASSWORD")
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {

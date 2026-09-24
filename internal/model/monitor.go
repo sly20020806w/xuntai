@@ -55,6 +55,7 @@ type AlertRule struct {
 	Level       string `gorm:"size:32"`
 	PoolID      uint   `gorm:"not null"`
 	SendGroupID uint   `gorm:"not null"`
+	TreeNodeID  uint
 }
 
 func (AlertRule) TableName() string { return "monitor_alert_rules" }

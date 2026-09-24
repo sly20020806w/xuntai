@@ -10,6 +10,7 @@ import (
 	"gorm.io/gorm"
 
 	"xuntai/internal/model"
+	"xuntai/internal/scope"
 	taskcore "xuntai/internal/task"
 	"xuntai/internal/tree"
 )
@@ -107,6 +108,11 @@ func (h handler) listJobs(c *gin.Context) {
 		}
 		query = query.Where("task_jobs.tree_node_id IN ?", ids)
 	}
+	query, err := scope.Limit(h.deps.DB, c.GetUint("uid"), query, "task_jobs.tree_node_id")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "权限核对失败"})
+		return
+	}
 	var rows []struct {
 		ID         uint
 		Name       string
@@ -120,6 +126,21 @@ func (h handler) listJobs(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "任务读取失败"})
 		return
 	}
+	jobIDs := make([]uint, 0, len(rows))
+	for _, row := range rows {
+		jobIDs = append(jobIDs, row.ID)
+	}
+	byJob := map[uint][]model.JobResult{}
+	if len(jobIDs) > 0 {
+		var results []model.JobResult
+		if err := h.deps.DB.Where("job_id IN ?", jobIDs).Order("id").Find(&results).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "结果读取失败"})
+			return
+		}
+		for _, result := range results {
+			byJob[result.JobID] = append(byJob[result.JobID], result)
+		}
+	}
 	out := make([]jobView, 0, len(rows))
 	for _, row := range rows {
 		view := jobView{
@@ -127,13 +148,8 @@ func (h handler) listJobs(c *gin.Context) {
 			NodeID: row.NodeID, NodeName: row.NodeName, ScriptName: row.ScriptName,
 			Issued: []string{},
 		}
-		var results []model.JobResult
-		if err := h.deps.DB.Where("job_id = ?", row.ID).Order("id").Find(&results).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "结果读取失败"})
-			return
-		}
-		view.Total = len(results)
-		for _, result := range results {
+		for _, result := range byJob[row.ID] {
+			view.Total++
 			if result.Status == "success" || result.Status == "failed" {
 				view.Done++
 			}

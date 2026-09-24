@@ -10,6 +10,7 @@ import (
 	"gorm.io/gorm"
 
 	"xuntai/internal/model"
+	"xuntai/internal/scope"
 	"xuntai/internal/tree"
 )
 
@@ -94,6 +95,11 @@ func (h handler) listInstances(c *gin.Context) {
 			return
 		}
 		query = query.Where("ticket_instances.tree_node_id IN ?", ids)
+	}
+	query, err := scope.Limit(h.deps.DB, c.GetUint("uid"), query, "ticket_instances.tree_node_id")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "权限核对失败"})
+		return
 	}
 	var out []instanceView
 	if err := query.Scan(&out).Error; err != nil {

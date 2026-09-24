@@ -2,12 +2,6 @@ package main
 
 import (
 	"log"
-	"os"
-	"path/filepath"
-
-	"github.com/glebarez/sqlite"
-	"gorm.io/driver/mysql"
-	"gorm.io/gorm"
 
 	"xuntai/internal/access"
 	apibase "xuntai/internal/api/base"
@@ -26,14 +20,21 @@ import (
 	"xuntai/internal/k8s"
 	"xuntai/internal/model"
 	"xuntai/internal/monitor"
+	"xuntai/internal/scope"
+	"xuntai/internal/store"
 	"xuntai/internal/task"
 	"xuntai/internal/ticket"
 	"xuntai/internal/tree"
 )
 
 func main() {
-	cfg := config.Load()
-	db, err := openDB(cfg)
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatal(err)
+	}
+	scope.SetEnabled(cfg.ScopeFilter)
+	logDB(cfg)
+	db, err := store.Open(cfg)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -96,8 +97,8 @@ func main() {
 	if dbReady {
 		log.Printf("已补上数据库示例")
 	}
-	if cfg.JWTSecret == "xuntai-dev-secret" {
-		log.Printf("正在使用内置登录密钥，不要把这个进程直接暴露到公网")
+	if err := base.ApplyPassword(db, cfg.AdminPassword); err != nil {
+		log.Fatal(err)
 	}
 	gate := access.New()
 	if err := gate.Reload(db); err != nil {
@@ -117,13 +118,10 @@ func main() {
 	}
 }
 
-func openDB(cfg config.Config) (*gorm.DB, error) {
+func logDB(cfg config.Config) {
 	if cfg.MySQLDSN != "" {
-		return gorm.Open(mysql.Open(cfg.MySQLDSN), &gorm.Config{})
-	}
-	if err := os.MkdirAll(filepath.Dir(cfg.SQLitePath), 0o755); err != nil {
-		return nil, err
+		log.Printf("使用 MySQL")
+		return
 	}
 	log.Printf("未配置 MySQL，使用本地库 %s", cfg.SQLitePath)
-	return gorm.Open(sqlite.Open(cfg.SQLitePath), &gorm.Config{})
 }

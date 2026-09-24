@@ -11,6 +11,7 @@ import (
 
 	"xuntai/internal/model"
 	moncore "xuntai/internal/monitor"
+	"xuntai/internal/scope"
 	"xuntai/internal/tree"
 )
 
@@ -104,8 +105,13 @@ func (h handler) listJobs(c *gin.Context) {
 	if !h.ready(c) {
 		return
 	}
+	query, err := scope.Limit(h.deps.DB, c.GetUint("uid"), h.deps.DB.Order("id"), "tree_node_id")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "权限核对失败"})
+		return
+	}
 	var jobs []model.ScrapeJob
-	if err := h.deps.DB.Order("id").Find(&jobs).Error; err != nil {
+	if err := query.Find(&jobs).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "采集任务读取失败"})
 		return
 	}
@@ -214,11 +220,17 @@ func (h handler) listRules(c *gin.Context) {
 	if !h.ready(c) {
 		return
 	}
+	query, err := scope.Limit(h.deps.DB, c.GetUint("uid"), h.deps.DB.Order("id"), "tree_node_id")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "权限核对失败"})
+		return
+	}
 	var rules []model.AlertRule
-	if err := h.deps.DB.Order("id").Find(&rules).Error; err != nil {
+	if err := query.Find(&rules).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "规则读取失败"})
 		return
 	}
+	names := h.nodeNames()
 	pools := h.poolNames()
 	groups := map[uint]string{}
 	var groupRows []model.SendGroup
@@ -244,6 +256,7 @@ func (h handler) listRules(c *gin.Context) {
 			"id": rule.ID, "name": rule.Name, "expr": rule.Expr, "level": rule.Level,
 			"poolName": pools[rule.PoolID], "sendGroupName": groups[rule.SendGroupID],
 			"sendgroup_id": rule.SendGroupID, "status": status[rule.ID],
+			"nodeId": rule.TreeNodeID, "nodeName": names[rule.TreeNodeID],
 		})
 	}
 	c.JSON(http.StatusOK, out)
@@ -259,6 +272,7 @@ func (h handler) createRule(c *gin.Context) {
 		Level       string `json:"level"`
 		PoolID      uint   `json:"poolId"`
 		SendGroupID uint   `json:"sendGroupId"`
+		TreeNodeID  uint   `json:"treeNodeId"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil || strings.TrimSpace(body.Name) == "" || strings.TrimSpace(body.Expr) == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "需要规则名和表达式"})
@@ -282,9 +296,16 @@ func (h handler) createRule(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "没有这个发送组"})
 		return
 	}
+	if body.TreeNodeID == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "需要节点"})
+		return
+	}
+	if !h.requireOps(c, body.TreeNodeID) {
+		return
+	}
 	row := model.AlertRule{
 		Name: strings.TrimSpace(body.Name), Expr: strings.TrimSpace(body.Expr), Level: body.Level,
-		PoolID: pool.ID, SendGroupID: group.ID,
+		PoolID: pool.ID, SendGroupID: group.ID, TreeNodeID: body.TreeNodeID,
 	}
 	if err := h.deps.DB.Create(&row).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "规则没有建成"})

@@ -102,9 +102,13 @@ func TestMonitorPullAndLeafDiscovery(t *testing.T) {
 	if rec := postJSON(engine, "/api/monitor/jobs", jobBody, lin); rec.Code != http.StatusOK {
 		t.Fatalf("林夏建订单采集 = %d %s", rec.Code, rec.Body.String())
 	}
-	jobs := decodeJSON[[]namedID](t, getAuth(engine, "/api/monitor/jobs", xu))
+	jobs := decodeJSON[[]namedID](t, getAuth(engine, "/api/monitor/jobs", lin))
 	if _, ok := findNamed(jobs, "订单进程"); !ok {
-		t.Fatal("列表按负责人收窄了")
+		t.Fatal("林夏看不见订单采集")
+	}
+	hiddenJobs := decodeJSON[[]namedID](t, getAuth(engine, "/api/monitor/jobs", xu))
+	if _, ok := findNamed(hiddenJobs, "订单进程"); ok {
+		t.Fatal("许衡看见了订单采集")
 	}
 	if _, ok := findNamed(jobs, "订单补充"); !ok {
 		t.Fatal("新采集任务没有出现在列表里")
@@ -115,7 +119,7 @@ func TestMonitorPullAndLeafDiscovery(t *testing.T) {
 	if tradeGroup.SendGroupID != tradeGroup.ID {
 		t.Fatalf("发送组编号 = %+v", tradeGroup)
 	}
-	rules := decodeJSON[[]ruleJSON](t, getAuth(engine, "/api/monitor/rules", xu))
+	rules := decodeJSON[[]ruleJSON](t, getAuth(engine, "/api/monitor/rules", lin))
 	orderRule := mustRule(t, rules, "订单错误率")
 	if orderRule.SendGroupID != tradeGroup.ID || orderRule.Status != "firing" {
 		t.Fatalf("订单错误率 = %+v", orderRule)

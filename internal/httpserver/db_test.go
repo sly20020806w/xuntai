@@ -72,7 +72,10 @@ func TestDbRegistryAndRestoreTicket(t *testing.T) {
 	xu := loginName(t, engine, "许衡", "secret")
 	chen := loginName(t, engine, "陈舟", "secret")
 
-	listed := getAuth(engine, "/api/db/instances", xu)
+	if hidden := getAuth(engine, "/api/db/instances", xu); hidden.Code != http.StatusOK || strings.Contains(hidden.Body.String(), "订单主库") {
+		t.Fatalf("许衡的数据库列表 = %d %s", hidden.Code, hidden.Body.String())
+	}
+	listed := getAuth(engine, "/api/db/instances", lin)
 	if listed.Code != http.StatusOK || strings.Contains(listed.Body.String(), "password") || strings.Contains(listed.Body.String(), "1234") {
 		t.Fatalf("实例列表 = %d %s", listed.Code, listed.Body.String())
 	}
@@ -86,7 +89,7 @@ func TestDbRegistryAndRestoreTicket(t *testing.T) {
 		t.Fatalf("从库关系不对 %+v", slave)
 	}
 	if _, ok := findDbInstance(instances, "支付主库"); !ok {
-		t.Fatal("列表按负责人收窄了")
+		t.Fatal("林夏看不见支付主库")
 	}
 
 	nodes := decodeNodes(t, getAuth(engine, "/api/tree/nodes", lin))
@@ -134,7 +137,7 @@ func TestDbRegistryAndRestoreTicket(t *testing.T) {
 		InstanceName string `json:"instanceName"`
 		Kind         string `json:"kind"`
 		Running      bool   `json:"running"`
-	}](t, getAuth(engine, "/api/db/backups", xu))
+	}](t, getAuth(engine, "/api/db/backups", lin))
 	var backupID uint
 	for _, row := range orderBackup {
 		if row.InstanceName == "订单主库" && row.Kind == "全量" {

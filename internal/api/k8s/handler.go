@@ -10,6 +10,7 @@ import (
 	"gorm.io/gorm"
 
 	"xuntai/internal/model"
+	"xuntai/internal/scope"
 	"xuntai/internal/tree"
 )
 
@@ -98,8 +99,13 @@ func (h handler) listProjects(c *gin.Context) {
 	if !h.ready(c) {
 		return
 	}
+	query, err := scope.Limit(h.deps.DB, c.GetUint("uid"), h.deps.DB.Order("id"), "tree_node_id")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "权限核对失败"})
+		return
+	}
 	var rows []model.Project
-	if err := h.deps.DB.Order("id").Find(&rows).Error; err != nil {
+	if err := query.Find(&rows).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "项目读取失败"})
 		return
 	}
@@ -164,8 +170,17 @@ func (h handler) listInstances(c *gin.Context) {
 	if !h.ready(c) {
 		return
 	}
+	query, err := scope.Limit(h.deps.DB, c.GetUint("uid"), h.deps.DB.Table("k8s_instances").
+		Select("k8s_instances.*").
+		Joins("join k8s_apps on k8s_apps.id = k8s_instances.app_id").
+		Joins("join k8s_projects on k8s_projects.id = k8s_apps.project_id").
+		Order("k8s_instances.id"), "k8s_projects.tree_node_id")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "权限核对失败"})
+		return
+	}
 	var rows []model.AppInstance
-	if err := h.deps.DB.Order("id").Find(&rows).Error; err != nil {
+	if err := query.Find(&rows).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "实例读取失败"})
 		return
 	}

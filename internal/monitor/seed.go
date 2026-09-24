@@ -32,7 +32,7 @@ func Seed(db *gorm.DB) (bool, error) {
 		return false, err
 	}
 	if count > 0 {
-		return false, nil
+		return false, bindRuleNodes(db)
 	}
 	err := db.Transaction(func(tx *gorm.DB) error {
 		basePool := model.ScrapePool{Name: "基础采集", RemoteWrite: "远端存储", SupportAlert: true}
@@ -48,6 +48,10 @@ func Seed(db *gorm.DB) (bool, error) {
 			return err
 		}
 		order, err := nodeID(tx, "订单")
+		if err != nil {
+			return err
+		}
+		edge, err := nodeID(tx, "入口")
 		if err != nil {
 			return err
 		}
@@ -92,9 +96,9 @@ func Seed(db *gorm.DB) (bool, error) {
 			groupID[group.Name] = group.ID
 		}
 		rules := []model.AlertRule{
-			{Name: "订单错误率", Expr: "sum(rate(http_requests_total{status=~\"5..\"}[5m])) > 1", Level: "紧急", PoolID: tradePool.ID, SendGroupID: groupID["交易发送"]},
-			{Name: "入口 5xx", Expr: "sum(rate(http_requests_total{job=\"edge\"}[5m])) > 1", Level: "警告", PoolID: basePool.ID, SendGroupID: groupID["基础架构发送"]},
-			{Name: "采集目标失联", Expr: "up == 0", Level: "警告", PoolID: basePool.ID, SendGroupID: groupID["可观测发送"]},
+			{Name: "订单错误率", Expr: "sum(rate(http_requests_total{status=~\"5..\"}[5m])) > 1", Level: "紧急", PoolID: tradePool.ID, SendGroupID: groupID["交易发送"], TreeNodeID: order},
+			{Name: "入口 5xx", Expr: "sum(rate(http_requests_total{job=\"edge\"}[5m])) > 1", Level: "警告", PoolID: basePool.ID, SendGroupID: groupID["基础架构发送"], TreeNodeID: edge},
+			{Name: "采集目标失联", Expr: "up == 0", Level: "警告", PoolID: basePool.ID, SendGroupID: groupID["可观测发送"], TreeNodeID: observe},
 		}
 		if err := tx.Create(&rules).Error; err != nil {
 			return err
@@ -111,6 +115,30 @@ func Seed(db *gorm.DB) (bool, error) {
 		return tx.Create(&events).Error
 	})
 	return err == nil, err
+}
+
+func bindRuleNodes(db *gorm.DB) error {
+	pairs := []struct {
+		rule string
+		node string
+	}{
+		{"订单错误率", "订单"},
+		{"入口 5xx", "入口"},
+		{"采集目标失联", "可观测"},
+	}
+	for _, pair := range pairs {
+		var node model.Node
+		if err := db.Where("name = ?", pair.node).Limit(1).Find(&node).Error; err != nil {
+			return err
+		}
+		if node.ID == 0 {
+			continue
+		}
+		if err := db.Model(&model.AlertRule{}).Where("name = ? AND (tree_node_id = 0 OR tree_node_id IS NULL)", pair.rule).Update("tree_node_id", node.ID).Error; err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func nodeID(tx *gorm.DB, name string) (uint, error) {

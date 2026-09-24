@@ -66,16 +66,18 @@ func TestTreeLeafAndOpsBoundary(t *testing.T) {
 		t.Fatalf("林夏的菜单 = %+v", profile.Menus)
 	}
 
-	nodes := decodeNodes(t, getAuth(engine, "/api/tree/nodes", xu))
-	if !hasNode(nodes, "交易") || !hasNode(nodes, "可观测") {
-		t.Fatal("列表按负责人收窄了")
+	xuNodes := decodeNodes(t, getAuth(engine, "/api/tree/nodes", xu))
+	if hasNode(xuNodes, "交易") || hasNode(xuNodes, "订单") || !hasNode(xuNodes, "可观测") {
+		t.Fatalf("许衡的节点 = %+v", xuNodes)
 	}
-	order := mustNode(t, nodes, "订单")
-	pay := mustNode(t, nodes, "支付")
-	observe := mustNode(t, nodes, "可观测")
-	edge := mustNode(t, nodes, "入口")
-	arch := mustNode(t, nodes, "基础架构")
-	trade := mustNode(t, nodes, "交易")
+	linNodes := decodeNodes(t, getAuth(engine, "/api/tree/nodes", lin))
+	order := mustNode(t, linNodes, "订单")
+	pay := mustNode(t, linNodes, "支付")
+	trade := mustNode(t, linNodes, "交易")
+	zhouNodes := decodeNodes(t, getAuth(engine, "/api/tree/nodes", zhou))
+	observe := mustNode(t, zhouNodes, "可观测")
+	edge := mustNode(t, zhouNodes, "入口")
+	arch := mustNode(t, zhouNodes, "基础架构")
 
 	if code := postJSON(engine, fmt.Sprintf("/api/tree/nodes/%d/machines", edge.ID), `{"name":"edge-x","ip":"10.0.0.1"}`, xu).Code; code != http.StatusForbidden {
 		t.Fatalf("许衡挂入口机器状态码 = %d", code)
@@ -93,7 +95,7 @@ func TestTreeLeafAndOpsBoundary(t *testing.T) {
 		t.Fatalf("非叶子挂机器 = %d %s", rec.Code, rec.Body.String())
 	}
 
-	tradeMachines := decodeMachines(t, getAuth(engine, fmt.Sprintf("/api/tree/machines?nodeId=%d", trade.ID), xu))
+	tradeMachines := decodeMachines(t, getAuth(engine, fmt.Sprintf("/api/tree/machines?nodeId=%d", trade.ID), lin))
 	if len(tradeMachines) != 3 {
 		t.Fatalf("交易子树机器数量 = %d", len(tradeMachines))
 	}

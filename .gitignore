@@ -1,4 +1,5 @@
 /bin/
+.env
 *.exe
 /data/
 demo/node_modules/

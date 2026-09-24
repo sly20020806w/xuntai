@@ -67,7 +67,7 @@ func TestTicketApprovalBeforeAction(t *testing.T) {
 	}
 	templateID := uint(templates[0]["id"].(float64))
 
-	nodes := decodeNodes(t, getAuth(engine, "/api/tree/nodes", chen))
+	nodes := decodeNodes(t, getAuth(engine, "/api/tree/nodes", lin))
 	order := mustNode(t, nodes, "订单")
 	trade := mustNode(t, nodes, "交易")
 
@@ -142,7 +142,7 @@ func TestTicketApprovalBeforeAction(t *testing.T) {
 		t.Fatalf("拒绝后再审批 = %d %s", rec.Code, rec.Body.String())
 	}
 
-	scoped := decodeJSON[[]instanceViewJSON](t, getAuth(engine, fmt.Sprintf("/api/ticket/instances?nodeId=%d", trade.ID), xu))
+	scoped := decodeJSON[[]instanceViewJSON](t, getAuth(engine, fmt.Sprintf("/api/ticket/instances?nodeId=%d", trade.ID), lin))
 	seen := map[string]bool{}
 	for _, row := range scoped {
 		if row.NodeName == "入口" || row.NodeName == "可观测" {
@@ -160,8 +160,8 @@ func TestTicketApprovalBeforeAction(t *testing.T) {
 			foundEdge = true
 		}
 	}
-	if !foundEdge {
-		t.Fatal("列表按负责人收窄了")
+	if foundEdge {
+		t.Fatal("许衡看见了入口工单")
 	}
 }
 

@@ -25,7 +25,7 @@ const nodeId = ref("order");
 const audience = ref("admin");
 const ticketRows = ref(seedTickets.map((item) => ({ ...item })));
 const loginName = ref("周宁");
-const loginPassword = ref("xuntai-dev");
+const loginPassword = ref("");
 const loginError = ref("");
 const session = ref(null);
 const token = ref("");
@@ -103,6 +103,7 @@ const shownMachines = computed(() => (session.value ? liveMachines.value.filter(
 const shownTickets = computed(() => (session.value ? liveTickets.value.filter((row) => inScope(row)) : ticketView.value));
 const shownTasks = computed(() => (session.value ? liveJobs.value.filter((row) => inScope(row)) : taskRows.value));
 const shownScrapeJobs = computed(() => (session.value ? liveScrapeJobs.value.filter((row) => inScope(row)) : jobRows.value));
+const shownRules = computed(() => liveRules.value.filter((row) => inScope(row)));
 const shownInstances = computed(() => liveInstances.value.filter((row) => inScope(row)));
 const shownReleases = computed(() => liveReleases.value.filter((row) => inScope(row)));
 const shownItems = computed(() => liveItems.value.filter((row) => inScope(row)));
@@ -1124,11 +1125,12 @@ if (keptToken) {
           <h2 class="panel-title">告警</h2>
           <table v-if="session">
             <thead>
-              <tr><th>规则</th><th>采集池</th><th>发送组</th><th>级别</th><th>状态</th></tr>
+              <tr><th>规则</th><th>节点</th><th>采集池</th><th>发送组</th><th>级别</th><th>状态</th></tr>
             </thead>
             <tbody>
-              <tr v-for="row in liveRules" :key="row.id">
+              <tr v-for="row in shownRules" :key="row.id">
                 <td>{{ row.name }}</td>
+                <td>{{ row.nodeName }}</td>
                 <td>{{ row.poolName }}</td>
                 <td>{{ row.sendGroupName }}</td>
                 <td>{{ row.level }}</td>

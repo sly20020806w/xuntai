@@ -102,12 +102,12 @@ func TestTaskBatchAndUniqueHost(t *testing.T) {
 	if err := json.Unmarshal(created.Body.Bytes(), &fresh); err != nil {
 		t.Fatal(err)
 	}
-	job := mustJob(t, decodeJSON[[]jobJSON](t, getAuth(engine, "/api/task/jobs", xu)), "订单对时")
+	job := mustJob(t, decodeJSON[[]jobJSON](t, getAuth(engine, "/api/task/jobs", lin)), "订单对时")
 	if job.Total != 2 || job.Done != 0 || len(job.Issued) != 1 {
 		t.Fatalf("首轮进度 = %+v", job)
 	}
-	if _, ok := findJob(decodeJSON[[]jobJSON](t, getAuth(engine, "/api/task/jobs", xu)), "内核参数基线"); !ok {
-		t.Fatal("列表按负责人收窄了")
+	if _, ok := findJob(decodeJSON[[]jobJSON](t, getAuth(engine, "/api/task/jobs", xu)), "内核参数基线"); ok {
+		t.Fatal("许衡看见了订单任务")
 	}
 
 	report := func(host, status string) *httptest.ResponseRecorder {

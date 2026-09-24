@@ -1,13 +1,15 @@
 package base
 
 import (
+	"errors"
+
 	"xuntai/internal/model"
 
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 )
 
-const DefaultPassword = "xuntai-dev"
+var errNeedPassword = errors.New("必须设置 XUNTAI_ADMIN_PASSWORD")
 
 func Seed(db *gorm.DB, password string) (bool, error) {
 	var count int64
@@ -18,7 +20,7 @@ func Seed(db *gorm.DB, password string) (bool, error) {
 		return false, nil
 	}
 	if password == "" {
-		password = DefaultPassword
+		return false, errNeedPassword
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
@@ -70,4 +72,17 @@ func Seed(db *gorm.DB, password string) (bool, error) {
 		}
 		return tx.Model(&user).Association("Roles").Replace([]model.Role{role})
 	})
+}
+
+// ApplyPassword 把样例账号的口令换成环境变量里的值。不打印口令。
+func ApplyPassword(db *gorm.DB, password string) error {
+	if password == "" {
+		return nil
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return err
+	}
+	names := []string{"周宁", "林夏", "许衡", "陈舟"}
+	return db.Model(&model.User{}).Where("name IN ?", names).Update("password_hash", string(hash)).Error
 }

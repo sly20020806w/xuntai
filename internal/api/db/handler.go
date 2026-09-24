@@ -10,6 +10,7 @@ import (
 	"gorm.io/gorm"
 
 	"xuntai/internal/model"
+	"xuntai/internal/scope"
 	"xuntai/internal/tree"
 )
 
@@ -55,6 +56,11 @@ func (h handler) listInstances(c *gin.Context) {
 			return
 		}
 		query = query.Where("tree_node_id IN ?", ids)
+	}
+	query, err := scope.Limit(h.deps.DB, c.GetUint("uid"), query, "tree_node_id")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "权限核对失败"})
+		return
 	}
 	var rows []model.Instance
 	if err := query.Find(&rows).Error; err != nil {
@@ -185,7 +191,7 @@ func (h handler) listBackups(c *gin.Context) {
 	if !h.ready(c) {
 		return
 	}
-	query := h.deps.DB.Order("id")
+	query := h.deps.DB.Model(&model.Backup{}).Order("id")
 	if raw := c.Query("instanceId"); raw != "" {
 		id, err := strconv.Atoi(raw)
 		if err != nil || id <= 0 {
@@ -193,6 +199,18 @@ func (h handler) listBackups(c *gin.Context) {
 			return
 		}
 		query = query.Where("instance_id = ?", id)
+	}
+	ids, all, err := scope.IDs(h.deps.DB, c.GetUint("uid"))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "权限核对失败"})
+		return
+	}
+	if !all {
+		if len(ids) == 0 {
+			query = query.Where("1 = 0")
+		} else {
+			query = query.Where("instance_id IN (?)", h.deps.DB.Model(&model.Instance{}).Select("id").Where("tree_node_id IN ?", ids))
+		}
 	}
 	var rows []model.Backup
 	if err := query.Find(&rows).Error; err != nil {
@@ -269,8 +287,21 @@ func (h handler) listRestores(c *gin.Context) {
 	if !h.ready(c) {
 		return
 	}
+	query := h.deps.DB.Model(&model.Restore{}).Order("id desc")
+	ids, all, err := scope.IDs(h.deps.DB, c.GetUint("uid"))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "权限核对失败"})
+		return
+	}
+	if !all {
+		if len(ids) == 0 {
+			query = query.Where("1 = 0")
+		} else {
+			query = query.Where("instance_id IN (?)", h.deps.DB.Model(&model.Instance{}).Select("id").Where("tree_node_id IN ?", ids))
+		}
+	}
 	var rows []model.Restore
-	if err := h.deps.DB.Order("id desc").Find(&rows).Error; err != nil {
+	if err := query.Find(&rows).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "还原读取失败"})
 		return
 	}

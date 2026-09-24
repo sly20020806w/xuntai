@@ -10,6 +10,7 @@ import (
 	"gorm.io/gorm"
 
 	"xuntai/internal/model"
+	"xuntai/internal/scope"
 	treecore "xuntai/internal/tree"
 )
 
@@ -72,8 +73,16 @@ func (h handler) listNodes(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "负责人读取失败"})
 		return
 	}
+	visible, all, err := scope.IDs(h.deps.DB, c.GetUint("uid"))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "权限核对失败"})
+		return
+	}
 	out := make([]nodeView, 0, len(nodes))
 	for _, node := range nodes {
+		if !scope.Allows(visible, all, node.ID) {
+			continue
+		}
 		view := nodeView{
 			ID: node.ID, Name: node.Name, ParentID: node.ParentID,
 			IsLeaf: node.IsLeaf, Level: node.Level, Owners: owners[node.ID],
@@ -317,9 +326,21 @@ func (h handler) requireOps(c *gin.Context, nodeID uint) bool {
 }
 
 func (h handler) machineScope(c *gin.Context) (map[uint]bool, bool) {
+	visible, all, err := scope.IDs(h.deps.DB, c.GetUint("uid"))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "权限核对失败"})
+		return nil, false
+	}
 	raw := c.Query("nodeId")
 	if raw == "" {
-		return nil, true
+		if all {
+			return nil, true
+		}
+		allowed := make(map[uint]bool, len(visible))
+		for _, id := range visible {
+			allowed[id] = true
+		}
+		return allowed, true
 	}
 	id, err := strconv.Atoi(raw)
 	if err != nil || id <= 0 {
@@ -337,7 +358,9 @@ func (h handler) machineScope(c *gin.Context) (map[uint]bool, bool) {
 	}
 	allowed := make(map[uint]bool, len(ids))
 	for _, item := range ids {
-		allowed[item] = true
+		if all || scope.Allows(visible, false, item) {
+			allowed[item] = true
+		}
 	}
 	return allowed, true
 }

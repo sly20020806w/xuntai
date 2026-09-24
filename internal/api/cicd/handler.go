@@ -11,6 +11,7 @@ import (
 
 	cicdcore "xuntai/internal/cicd"
 	"xuntai/internal/model"
+	"xuntai/internal/scope"
 	"xuntai/internal/tree"
 )
 
@@ -38,8 +39,13 @@ func (h handler) listItems(c *gin.Context) {
 	if !h.ready(c) {
 		return
 	}
+	query, err := scope.Limit(h.deps.DB, c.GetUint("uid"), h.deps.DB.Order("id"), "tree_node_id")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "权限核对失败"})
+		return
+	}
 	var rows []model.DeployItem
-	if err := h.deps.DB.Order("id").Find(&rows).Error; err != nil {
+	if err := query.Find(&rows).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "发布项读取失败"})
 		return
 	}
@@ -99,8 +105,16 @@ func (h handler) listOrders(c *gin.Context) {
 	if !h.ready(c) {
 		return
 	}
+	query, err := scope.Limit(h.deps.DB, c.GetUint("uid"), h.deps.DB.Table("cicd_orders").
+		Select("cicd_orders.*").
+		Joins("join cicd_deploy_items on cicd_deploy_items.id = cicd_orders.item_id").
+		Order("cicd_orders.id desc"), "cicd_deploy_items.tree_node_id")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "权限核对失败"})
+		return
+	}
 	var orders []model.ReleaseOrder
-	if err := h.deps.DB.Order("id desc").Find(&orders).Error; err != nil {
+	if err := query.Find(&orders).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "发布单读取失败"})
 		return
 	}

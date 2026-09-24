@@ -104,11 +104,15 @@ func TestClusterRecordAndProdTicket(t *testing.T) {
 		t.Fatalf("周宁登记集群 = %d %s", rec.Code, rec.Body.String())
 	}
 
-	instances := decodeJSON[[]instanceJSON](t, getAuth(engine, "/api/k8s/instances", xu))
+	instances := decodeJSON[[]instanceJSON](t, getAuth(engine, "/api/k8s/instances", lin))
 	prod := mustInstance(t, instances, "order-api", "生产")
 	dev := mustInstance(t, instances, "order-api", "开发")
 	if _, ok := findInstance(instances, "pay-gateway", "生产"); !ok {
-		t.Fatal("列表按负责人收窄了")
+		t.Fatal("林夏看不见支付实例")
+	}
+	hidden := decodeJSON[[]instanceJSON](t, getAuth(engine, "/api/k8s/instances", xu))
+	if _, ok := findInstance(hidden, "order-api", "生产"); ok {
+		t.Fatal("许衡看见了订单实例")
 	}
 
 	tickets := decodeJSON[[]struct {
@@ -144,7 +148,7 @@ func TestClusterRecordAndProdTicket(t *testing.T) {
 	if rec := putJSON(engine, fmt.Sprintf("/api/k8s/instances/%d", dev.ID), `{"image":"order-api:1.8.4-dev","replicas":1}`, lin); rec.Code != http.StatusOK {
 		t.Fatalf("开发环境改镜像 = %d %s", rec.Code, rec.Body.String())
 	}
-	again := decodeJSON[[]instanceJSON](t, getAuth(engine, "/api/k8s/instances", xu))
+	again := decodeJSON[[]instanceJSON](t, getAuth(engine, "/api/k8s/instances", lin))
 	if mustInstance(t, again, "order-api", "生产").Image != "order-api:1.8.4" {
 		t.Fatal("生产镜像没有改成新标签")
 	}

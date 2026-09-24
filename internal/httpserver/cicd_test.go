@@ -75,13 +75,17 @@ func TestReleaseStagesAndRepublish(t *testing.T) {
 	xu := loginName(t, engine, "许衡", "secret")
 	chen := loginName(t, engine, "陈舟", "secret")
 
-	orders := decodeJSON[[]orderJSON](t, getAuth(engine, "/api/cicd/orders", xu))
+	orders := decodeJSON[[]orderJSON](t, getAuth(engine, "/api/cicd/orders", lin))
 	waiting := mustOrder(t, orders, "order-api", "1.8.4")
 	if waiting.Status != "running" || !stagePending(waiting, "生产") {
 		t.Fatalf("生产单应该停在生产前 %+v", waiting)
 	}
 	if _, ok := findOrder(orders, "pay-gateway", "2.2.0-dev"); !ok {
-		t.Fatal("列表按负责人收窄了")
+		t.Fatal("林夏看不见支付发布")
+	}
+	hiddenOrders := decodeJSON[[]orderJSON](t, getAuth(engine, "/api/cicd/orders", xu))
+	if _, ok := findOrder(hiddenOrders, "order-api", "1.8.4"); ok {
+		t.Fatal("许衡看见了订单发布")
 	}
 	confirmPath := fmt.Sprintf("/api/cicd/orders/%d/confirm", waiting.ID)
 	if rec := postJSON(engine, confirmPath, "", zhou); rec.Code != http.StatusForbidden {
@@ -93,7 +97,7 @@ func TestReleaseStagesAndRepublish(t *testing.T) {
 	if rec := postJSON(engine, confirmPath, "", lin); rec.Code != http.StatusOK {
 		t.Fatalf("林夏确认生产 = %d %s", rec.Code, rec.Body.String())
 	}
-	if imageOf(t, engine, xu, "order-api", "生产") != "order-api:1.8.4" {
+	if imageOf(t, engine, lin, "order-api", "生产") != "order-api:1.8.4" {
 		t.Fatal("确认生产后镜像没有换成新标签")
 	}
 
@@ -120,7 +124,7 @@ func TestReleaseStagesAndRepublish(t *testing.T) {
 	if err := json.Unmarshal(dev.Body.Bytes(), &devOrder); err != nil || devOrder.Status != "finished" {
 		t.Fatalf("开发单应直接完成 %+v %s", devOrder, dev.Body.String())
 	}
-	if imageOf(t, engine, xu, "order-api", "开发") != "order-api:1.8.5-dev" {
+	if imageOf(t, engine, lin, "order-api", "开发") != "order-api:1.8.5-dev" {
 		t.Fatal("开发镜像没有直接换上")
 	}
 
@@ -158,7 +162,7 @@ func TestReleaseStagesAndRepublish(t *testing.T) {
 			t.Fatalf("确认第 %d 阶段 = %d %s", i+1, rec.Code, rec.Body.String())
 		}
 	}
-	if imageOf(t, engine, xu, "order-api", "生产") != "order-api:1.8.3" {
+	if imageOf(t, engine, lin, "order-api", "生产") != "order-api:1.8.3" {
 		t.Fatal("再发旧标签后镜像没有回去")
 	}
 	if rec := postJSON(engine, fmt.Sprintf("/api/cicd/orders/%d/confirm", again.ID), "", lin); rec.Code != http.StatusBadRequest {
