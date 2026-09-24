@@ -11,11 +11,13 @@ import (
 
 	"xuntai/internal/access"
 	apibase "xuntai/internal/api/base"
+	apiticket "xuntai/internal/api/ticket"
 	apitree "xuntai/internal/api/tree"
 	"xuntai/internal/base"
 	"xuntai/internal/config"
 	"xuntai/internal/httpserver"
 	"xuntai/internal/model"
+	"xuntai/internal/ticket"
 	"xuntai/internal/tree"
 )
 
@@ -46,13 +48,21 @@ func main() {
 	if treeReady {
 		log.Printf("已补上服务树示例，林夏、许衡、陈舟的密码与初始用户相同")
 	}
+	ticketReady, err := ticket.Seed(db)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if ticketReady {
+		log.Printf("已补上工单示例")
+	}
 	gate := access.New()
 	if err := gate.Reload(db); err != nil {
 		log.Fatal(err)
 	}
 	if err := httpserver.Run(cfg.HTTPAddr, httpserver.Deps{
-		Base: apibase.Deps{DB: db, Secret: cfg.JWTSecret, Gate: gate},
-		Tree: apitree.Deps{DB: db},
+		Base:   apibase.Deps{DB: db, Secret: cfg.JWTSecret, Gate: gate},
+		Tree:   apitree.Deps{DB: db},
+		Ticket: apiticket.Deps{DB: db},
 	}); err != nil {
 		log.Fatal(err)
 	}

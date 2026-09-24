@@ -8,6 +8,15 @@ import (
 
 // CanWrite 沿父节点往上找运维负责人。研发负责人不能写。
 func CanWrite(db *gorm.DB, userID, nodeID uint) (bool, error) {
+	return hasOwner(db, userID, nodeID, []string{"ops"})
+}
+
+// OnNode 是这个节点或上级的运维、研发负责人。用来提交工单，不能用来改树。
+func OnNode(db *gorm.DB, userID, nodeID uint) (bool, error) {
+	return hasOwner(db, userID, nodeID, []string{"ops", "rd"})
+}
+
+func hasOwner(db *gorm.DB, userID, nodeID uint, kinds []string) (bool, error) {
 	seen := map[uint]struct{}{}
 	for {
 		if _, ok := seen[nodeID]; ok {
@@ -20,7 +29,7 @@ func CanWrite(db *gorm.DB, userID, nodeID uint) (bool, error) {
 		}
 		var count int64
 		err := db.Model(&model.NodeOwner{}).
-			Where("node_id = ? AND user_id = ? AND kind = ?", node.ID, userID, "ops").
+			Where("node_id = ? AND user_id = ? AND kind IN ?", node.ID, userID, kinds).
 			Count(&count).Error
 		if err != nil {
 			return false, err

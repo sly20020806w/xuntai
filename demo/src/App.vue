@@ -35,6 +35,11 @@ const treeError = ref("");
 const machineName = ref("");
 const machineIP = ref("");
 const machineNodeId = ref("");
+const liveTickets = ref([]);
+const ticketTemplates = ref([]);
+const ticketTitle = ref("");
+const ticketNodeId = ref("");
+const ticketError = ref("");
 
 const current = computed(() => modules.find((item) => item.id === currentId.value));
 const node = computed(() => tree.find((item) => item.id === nodeId.value));
@@ -42,6 +47,7 @@ const node = computed(() => tree.find((item) => item.id === nodeId.value));
 const machineRows = computed(() => visibleRecords(machines, nodeId.value));
 const liveLeaves = computed(() => liveNodes.value.filter((item) => item.isLeaf));
 const shownMachines = computed(() => (session.value ? liveMachines.value : machineRows.value));
+const shownTickets = computed(() => (session.value ? liveTickets.value : ticketView.value));
 const ticketView = computed(() => visibleRecords(ticketRows.value, nodeId.value));
 const taskRows = computed(() => visibleRecords(tasks, nodeId.value));
 const jobRows = computed(() => visibleRecords(jobs, nodeId.value));
@@ -77,6 +83,7 @@ async function login() {
     token.value = data.token;
     session.value = await me.json();
     await loadTree();
+    await loadTickets();
   } catch {
     loginError.value = "登录服务没有启动";
   }
@@ -144,8 +151,84 @@ function ownerText(item) {
     .join("、");
 }
 
+async function loadTickets() {
+  if (!token.value) return;
+  ticketError.value = "";
+  try {
+    const headers = { Authorization: `Bearer ${token.value}` };
+    const [instancesRes, templatesRes] = await Promise.all([
+      fetch("/api/ticket/instances", { headers }),
+      fetch("/api/ticket/templates", { headers }),
+    ]);
+    if (!instancesRes.ok || !templatesRes.ok) {
+      ticketError.value = "工单没有读出来";
+      return;
+    }
+    liveTickets.value = await instancesRes.json();
+    ticketTemplates.value = await templatesRes.json();
+    if (!liveNodes.value.length) await loadTree();
+    if (!liveNodes.value.some((item) => String(item.id) === ticketNodeId.value)) {
+      const order = liveNodes.value.find((item) => item.name === "订单");
+      ticketNodeId.value = String((order || liveNodes.value[0] || {}).id || "");
+    }
+  } catch {
+    ticketError.value = "登录服务没有启动";
+  }
+}
+
+async function createTicket() {
+  ticketError.value = "";
+  const template = ticketTemplates.value[0];
+  if (!template || !ticketTitle.value.trim()) {
+    ticketError.value = "先写事项";
+    return;
+  }
+  try {
+    const res = await fetch("/api/ticket/instances", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token.value}`,
+      },
+      body: JSON.stringify({
+        templateId: template.id,
+        treeNodeId: Number(ticketNodeId.value),
+        title: ticketTitle.value.trim(),
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      ticketError.value = data.error || "工单没有建成";
+      return;
+    }
+    ticketTitle.value = "";
+    await loadTickets();
+  } catch {
+    ticketError.value = "登录服务没有启动";
+  }
+}
+
+async function decide(id, action) {
+  ticketError.value = "";
+  try {
+    const res = await fetch(`/api/ticket/instances/${id}/${action}`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token.value}` },
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      ticketError.value = data.error || "这张单没有改成";
+      return;
+    }
+    await loadTickets();
+  } catch {
+    ticketError.value = "登录服务没有启动";
+  }
+}
+
 watch(currentId, (id) => {
-  if (id === "tree") loadTree();
+  if (id === "tree" || id === "ticket") loadTree();
+  if (id === "ticket") loadTickets();
 });
 </script>
 
@@ -284,17 +367,26 @@ watch(currentId, (id) => {
         </template>
 
         <template v-else-if="currentId === 'ticket'">
-          <p class="note">待审批的单可以点通过，状态会变成待执行。拒绝的单停在这里。</p>
+          <form v-if="session" class="login" @submit.prevent="createTicket">
+            <select v-model="ticketNodeId" aria-label="节点">
+              <option v-for="item in liveNodes" :key="item.id" :value="String(item.id)">{{ item.name }}</option>
+            </select>
+            <input v-model="ticketTitle" aria-label="事项" placeholder="事项" />
+            <button type="submit">提交</button>
+            <span v-if="ticketError">{{ ticketError }}</span>
+          </form>
+          <p v-if="session" class="note">模板没有状态。待审批只能通过或拒绝，通过以后才是待执行。不能审批自己的单。</p>
+          <p v-else class="note">待审批的单可以点通过，状态会变成待执行。拒绝的单停在这里。</p>
           <table>
             <thead>
               <tr><th>单号</th><th>事项</th><th>节点</th><th>发起人</th><th>状态</th><th></th></tr>
             </thead>
             <tbody>
-              <tr v-for="row in ticketView" :key="row.id">
+              <tr v-for="row in shownTickets" :key="row.id">
                 <td>{{ row.id }}</td>
                 <td>{{ row.title }}</td>
-                <td>{{ labelOf(row.nodeId) }}</td>
-                <td>{{ row.owner }}</td>
+                <td>{{ row.nodeName || labelOf(row.nodeId) }}</td>
+                <td>{{ row.applicant || row.owner }}</td>
                 <td>
                   <span class="lamp" :class="ticketStatus[row.status].tone">
                     <i></i>{{ ticketStatus[row.status].text }}
@@ -303,10 +395,22 @@ watch(currentId, (id) => {
                 <td>
                   <div class="row-actions">
                     <button
-                      v-if="row.status === 'pending_approve'"
+                      v-if="row.status === 'pending_approve' && !session"
                       @click="approve(row.id)"
                     >
                       通过
+                    </button>
+                    <button
+                      v-if="row.status === 'pending_approve' && session"
+                      @click="decide(row.id, 'approve')"
+                    >
+                      通过
+                    </button>
+                    <button
+                      v-if="row.status === 'pending_approve' && session"
+                      @click="decide(row.id, 'reject')"
+                    >
+                      拒绝
                     </button>
                   </div>
                 </td>
