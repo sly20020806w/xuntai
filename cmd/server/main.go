@@ -11,6 +11,7 @@ import (
 
 	"xuntai/internal/access"
 	apibase "xuntai/internal/api/base"
+	apik8s "xuntai/internal/api/k8s"
 	apimonitor "xuntai/internal/api/monitor"
 	apitask "xuntai/internal/api/task"
 	apiticket "xuntai/internal/api/ticket"
@@ -18,6 +19,7 @@ import (
 	"xuntai/internal/base"
 	"xuntai/internal/config"
 	"xuntai/internal/httpserver"
+	"xuntai/internal/k8s"
 	"xuntai/internal/model"
 	"xuntai/internal/monitor"
 	"xuntai/internal/task"
@@ -73,6 +75,13 @@ func main() {
 	if monitorReady {
 		log.Printf("已补上监控示例")
 	}
+	k8sReady, err := k8s.Seed(db)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if k8sReady {
+		log.Printf("已补上集群示例")
+	}
 	gate := access.New()
 	if err := gate.Reload(db); err != nil {
 		log.Fatal(err)
@@ -83,6 +92,7 @@ func main() {
 		Ticket:  apiticket.Deps{DB: db},
 		Task:    apitask.Deps{DB: db},
 		Monitor: apimonitor.Deps{DB: db},
+		K8s:     apik8s.Deps{DB: db},
 	}); err != nil {
 		log.Fatal(err)
 	}

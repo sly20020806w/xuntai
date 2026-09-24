@@ -55,6 +55,12 @@ const scrapePoolId = ref("");
 const scrapeNodeId = ref("");
 const scrapePort = ref(9100);
 const monitorError = ref("");
+const liveClusters = ref([]);
+const liveInstances = ref([]);
+const k8sInstanceId = ref("");
+const k8sImage = ref("");
+const k8sTicketId = ref("");
+const k8sError = ref("");
 
 const current = computed(() => modules.find((item) => item.id === currentId.value));
 const node = computed(() => tree.find((item) => item.id === nodeId.value));
@@ -108,9 +114,7 @@ async function login() {
     await loadTickets();
     await loadTasks();
     await loadMonitor();
-  } catch {
-    loginError.value = "登录服务没有启动";
-  }
+    await loadK8s();
 }
 
 async function loadTree() {
@@ -424,11 +428,70 @@ function targetText(row) {
   return row.target;
 }
 
+async function loadK8s() {
+  if (!token.value) return;
+  k8sError.value = "";
+  try {
+    const headers = { Authorization: `Bearer ${token.value}` };
+    const [clustersRes, instancesRes] = await Promise.all([
+      fetch("/api/k8s/clusters", { headers }),
+      fetch("/api/k8s/instances", { headers }),
+    ]);
+    if (!clustersRes.ok || !instancesRes.ok) {
+      k8sError.value = "集群没有读出来";
+      return;
+    }
+    liveClusters.value = await clustersRes.json();
+    liveInstances.value = await instancesRes.json();
+    if (!liveInstances.value.some((item) => String(item.id) === k8sInstanceId.value)) {
+      const prod = liveInstances.value.find((item) => item.env === "生产");
+      const picked = prod || liveInstances.value[0];
+      k8sInstanceId.value = picked ? String(picked.id) : "";
+      k8sImage.value = picked ? picked.image : "";
+    }
+  } catch {
+    k8sError.value = "登录服务没有启动";
+  }
+}
+
+async function saveInstance() {
+  k8sError.value = "";
+  const current = liveInstances.value.find((item) => String(item.id) === k8sInstanceId.value);
+  if (!current || !k8sImage.value.trim()) {
+    k8sError.value = "先选实例和镜像";
+    return;
+  }
+  try {
+    const res = await fetch(`/api/k8s/instances/${current.id}`, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token.value}`,
+      },
+      body: JSON.stringify({
+        image: k8sImage.value.trim(),
+        replicas: current.replicas,
+        ticketId: Number(k8sTicketId.value) || 0,
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      k8sError.value = data.error || "实例没有改成";
+      return;
+    }
+    k8sTicketId.value = "";
+    await loadK8s();
+  } catch {
+    k8sError.value = "登录服务没有启动";
+  }
+}
+
 watch(currentId, (id) => {
   if (id === "tree" || id === "ticket" || id === "task" || id === "monitor") loadTree();
   if (id === "ticket") loadTickets();
   if (id === "task") loadTasks();
   if (id === "monitor") loadMonitor();
+  if (id === "k8s") loadK8s();
 });
 </script>
 
@@ -762,7 +825,22 @@ watch(currentId, (id) => {
               应用运维
             </button>
           </div>
-          <table v-if="audience === 'admin'">
+          <p v-if="session" class="note">节点状态向集群查，现在还没接上，所以不在这里造节点。生产改镜像要有一张已审批的工单，开发环境不用。换镜像是再发一个标签。</p>
+          <table v-if="audience === 'admin' && session">
+            <thead>
+              <tr><th>集群</th><th>环境</th><th>登记版本</th><th>探活</th><th>接入</th></tr>
+            </thead>
+            <tbody>
+              <tr v-for="row in liveClusters" :key="row.id">
+                <td>{{ row.name }}</td>
+                <td>{{ row.env }}</td>
+                <td>{{ row.version }}</td>
+                <td><span class="lamp copper"><i></i>未接入</span></td>
+                <td>只登记</td>
+              </tr>
+            </tbody>
+          </table>
+          <table v-else-if="audience === 'admin'">
             <thead>
               <tr><th>集群</th><th>环境</th><th>版本</th><th>探活</th><th>接入</th></tr>
             </thead>
@@ -776,6 +854,32 @@ watch(currentId, (id) => {
               </tr>
             </tbody>
           </table>
+          <template v-else-if="session">
+            <form class="login" @submit.prevent="saveInstance">
+              <select v-model="k8sInstanceId" aria-label="实例" @change="k8sImage = (liveInstances.find((item) => String(item.id) === k8sInstanceId) || {}).image || ''">
+                <option v-for="item in liveInstances" :key="item.id" :value="String(item.id)">{{ item.appName }} · {{ item.env }}</option>
+              </select>
+              <input v-model="k8sImage" aria-label="镜像" placeholder="镜像" />
+              <input v-model="k8sTicketId" aria-label="工单号" placeholder="生产工单号" />
+              <button type="submit">改镜像</button>
+              <span v-if="k8sError">{{ k8sError }}</span>
+            </form>
+            <table>
+              <thead>
+                <tr><th>应用</th><th>节点</th><th>集群</th><th>环境</th><th>镜像</th><th>副本</th></tr>
+              </thead>
+              <tbody>
+                <tr v-for="row in liveInstances" :key="row.id">
+                  <td>{{ row.appName }}</td>
+                  <td>{{ row.nodeName }}</td>
+                  <td>{{ row.cluster }}</td>
+                  <td>{{ row.env }}</td>
+                  <td>{{ row.image }}</td>
+                  <td>{{ row.replicas }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </template>
           <table v-else>
             <thead>
               <tr><th>应用</th><th>节点</th><th>集群</th><th>镜像</th><th>副本</th></tr>
