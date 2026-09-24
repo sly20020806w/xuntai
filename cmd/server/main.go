@@ -45,11 +45,7 @@ func main() {
 		log.Fatal(err)
 	}
 	if created {
-		password := cfg.AdminPassword
-		if password == "" {
-			password = base.DefaultPassword
-		}
-		log.Printf("已创建初始用户 周宁，密码 %s", password)
+		log.Printf("已创建初始用户 周宁")
 	}
 	treeReady, err := tree.Seed(db, cfg.AdminPassword)
 	if err != nil {
@@ -99,6 +95,9 @@ func main() {
 	}
 	if dbReady {
 		log.Printf("已补上数据库示例")
+	}
+	if cfg.JWTSecret == "xuntai-dev-secret" {
+		log.Printf("正在使用内置登录密钥，不要把这个进程直接暴露到公网")
 	}
 	gate := access.New()
 	if err := gate.Reload(db); err != nil {

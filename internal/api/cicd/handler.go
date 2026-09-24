@@ -127,7 +127,7 @@ func (h handler) listOrders(c *gin.Context) {
 			stageOut = append(stageOut, gin.H{"name": stage.Name, "status": stage.Status, "seq": stage.Seq})
 		}
 		out = append(out, gin.H{
-			"id": order.ID, "itemName": item.Name, "nodeName": names[item.TreeNodeID],
+			"id": order.ID, "itemName": item.Name, "nodeId": item.TreeNodeID, "nodeName": names[item.TreeNodeID],
 			"tag": order.Tag, "env": order.Env, "status": order.Status, "stages": stageOut,
 		})
 	}

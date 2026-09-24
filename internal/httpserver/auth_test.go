@@ -13,6 +13,7 @@ import (
 
 	"xuntai/internal/access"
 	apibase "xuntai/internal/api/base"
+	"xuntai/internal/auth"
 	"xuntai/internal/base"
 	"xuntai/internal/model"
 )
@@ -86,6 +87,73 @@ func TestLoginMenusAndRoleBoundary(t *testing.T) {
 	if forbidden.Code != http.StatusForbidden {
 		t.Fatalf("无角色访问用户列表状态码 = %d", forbidden.Code)
 	}
+}
+
+func TestTokenRoleClaimDoesNotGrantAccess(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := model.Migrate(db); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := base.Seed(db, "secret"); err != nil {
+		t.Fatal(err)
+	}
+	gate := access.New()
+	if err := gate.Reload(db); err != nil {
+		t.Fatal(err)
+	}
+	engine := New(Deps{Base: apibase.Deps{DB: db, Secret: "test-secret", Gate: gate}})
+
+	plain := postJSON(engine, "/api/base/users", `{"name":"林夏","password":"secret"}`, loginToken(t, engine))
+	if plain.Code != http.StatusOK {
+		t.Fatalf("创建用户 = %d %s", plain.Code, plain.Body.String())
+	}
+	var created struct {
+		ID uint `json:"id"`
+	}
+	if err := json.Unmarshal(plain.Body.Bytes(), &created); err != nil || created.ID == 0 {
+		t.Fatal(err)
+	}
+	forged, err := auth.Sign("test-secret", created.ID, "林夏", []string{"平台管理员"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec := getAuth(engine, "/api/base/users", forged); rec.Code != http.StatusForbidden {
+		t.Fatalf("伪造角色仍能访问 = %d %s", rec.Code, rec.Body.String())
+	}
+
+	var zhou model.User
+	if err := db.Where("name = ?", "周宁").First(&zhou).Error; err != nil {
+		t.Fatal(err)
+	}
+	login := postJSON(engine, "/api/base/login", `{"name":"周宁","password":"secret"}`, "")
+	var session struct {
+		Token string `json:"token"`
+	}
+	if err := json.Unmarshal(login.Body.Bytes(), &session); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Delete(&model.User{}, zhou.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if rec := getAuth(engine, "/api/base/users", session.Token); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("已删除用户仍能访问 = %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func loginToken(t *testing.T, engine http.Handler) string {
+	t.Helper()
+	login := postJSON(engine, "/api/base/login", `{"name":"周宁","password":"secret"}`, "")
+	var session struct {
+		Token string `json:"token"`
+	}
+	if login.Code != http.StatusOK || json.Unmarshal(login.Body.Bytes(), &session) != nil || session.Token == "" {
+		t.Fatalf("登录失败 %d %s", login.Code, login.Body.String())
+	}
+	return session.Token
 }
 
 func postJSON(engine http.Handler, path, body, token string) *httptest.ResponseRecorder {

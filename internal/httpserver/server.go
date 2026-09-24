@@ -27,6 +27,7 @@ type Deps struct {
 
 func New(deps Deps) *gin.Engine {
 	r := gin.New()
+	_ = r.SetTrustedProxies(nil)
 	r.Use(func(c *gin.Context) {
 		c.Header("Access-Control-Allow-Origin", "http://127.0.0.1:5173")
 		c.Header("Access-Control-Allow-Headers", "Authorization, Content-Type")
@@ -37,7 +38,7 @@ func New(deps Deps) *gin.Engine {
 		}
 		c.Next()
 	})
-	r.Use(access.Middleware(deps.Base.Secret, deps.Base.Gate))
+	r.Use(access.Middleware(deps.Base.Secret, deps.Base.Gate, deps.Base.DB))
 	r.GET("/healthz", func(c *gin.Context) {
 		c.JSON(200, gin.H{"status": "ok"})
 	})
@@ -53,5 +54,6 @@ func New(deps Deps) *gin.Engine {
 }
 
 func Run(addr string, deps Deps) error {
+	gin.SetMode(gin.ReleaseMode)
 	return New(deps).Run(addr)
 }

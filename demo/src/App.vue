@@ -91,9 +91,30 @@ const node = computed(() => tree.find((item) => item.id === nodeId.value));
 
 const machineRows = computed(() => visibleRecords(machines, nodeId.value));
 const liveLeaves = computed(() => liveNodes.value.filter((item) => item.isLeaf));
-const shownMachines = computed(() => (session.value ? liveMachines.value : machineRows.value));
-const shownTickets = computed(() => (session.value ? liveTickets.value : ticketView.value));
-const shownTasks = computed(() => (session.value ? liveJobs.value : taskRows.value));
+const sideNodes = computed(() => {
+  if (!session.value) return tree;
+  return liveNodes.value.map((item) => ({
+    id: String(item.id),
+    name: item.name,
+    depth: item.level || 0,
+  }));
+});
+const shownMachines = computed(() => (session.value ? liveMachines.value.filter((row) => inScope(row)) : machineRows.value));
+const shownTickets = computed(() => (session.value ? liveTickets.value.filter((row) => inScope(row)) : ticketView.value));
+const shownTasks = computed(() => (session.value ? liveJobs.value.filter((row) => inScope(row)) : taskRows.value));
+const shownScrapeJobs = computed(() => (session.value ? liveScrapeJobs.value.filter((row) => inScope(row)) : jobRows.value));
+const shownInstances = computed(() => liveInstances.value.filter((row) => inScope(row)));
+const shownReleases = computed(() => liveReleases.value.filter((row) => inScope(row)));
+const shownItems = computed(() => liveItems.value.filter((row) => inScope(row)));
+const shownDb = computed(() => liveDb.value.filter((row) => inScope(row)));
+const shownBackups = computed(() => liveBackups.value.filter((row) => {
+  const inst = liveDb.value.find((item) => item.id === row.instanceId);
+  return inst && inScope(inst);
+}));
+const shownRestores = computed(() => liveRestores.value.filter((row) => {
+  const inst = liveDb.value.find((item) => item.id === row.instanceId);
+  return inst && inScope(inst);
+}));
 const taskStateText = {
   running: "执行中",
   paused: "已暂停",
@@ -108,6 +129,45 @@ const appRows = computed(() => visibleRecords(apps, nodeId.value));
 const releaseRows = computed(() => visibleRecords(releases, nodeId.value));
 const dbHosts = computed(() => liveMachines.value.filter((item) => String(item.nodeId) === dbNodeId.value));
 const dbMasters = computed(() => liveDb.value.filter((item) => String(item.nodeId) === dbNodeId.value && item.role === "主"));
+
+function subtreeIds(rootId) {
+  const root = Number(rootId);
+  const children = new Map();
+  for (const node of liveNodes.value) {
+    const parent = node.parentId || 0;
+    const list = children.get(parent) || [];
+    list.push(node.id);
+    children.set(parent, list);
+  }
+  const out = new Set();
+  const stack = [root];
+  while (stack.length) {
+    const current = stack.pop();
+    if (!current || out.has(current)) continue;
+    out.add(current);
+    for (const child of children.get(current) || []) stack.push(child);
+  }
+  return out;
+}
+
+function inScope(row) {
+  return subtreeIds(nodeId.value).has(Number(row.nodeId));
+}
+
+function nodeTitle() {
+  if (session.value) {
+    const row = liveNodes.value.find((item) => String(item.id) === String(nodeId.value));
+    return row ? row.name : "";
+  }
+  return labelOf(nodeId.value);
+}
+
+function logout() {
+  session.value = null;
+  token.value = "";
+  sessionStorage.removeItem("xuntai-token");
+  nodeId.value = "order";
+}
 
 function approve(id) {
   const row = ticketRows.value.find((item) => item.id === id);
@@ -135,6 +195,7 @@ async function login() {
       return;
     }
     token.value = data.token;
+    sessionStorage.setItem("xuntai-token", data.token);
     session.value = await me.json();
     await loadTree();
     await loadTickets();
@@ -163,6 +224,10 @@ async function loadTree() {
     }
     liveNodes.value = await nodesRes.json();
     liveMachines.value = await machinesRes.json();
+    if (!liveNodes.value.some((item) => String(item.id) === String(nodeId.value))) {
+      const order = liveNodes.value.find((item) => item.name === "订单");
+      nodeId.value = String((order || liveNodes.value[0] || {}).id || "");
+    }
     if (!liveLeaves.value.some((item) => String(item.id) === machineNodeId.value)) {
       machineNodeId.value = liveLeaves.value[0] ? String(liveLeaves.value[0].id) : "";
     }
@@ -740,6 +805,29 @@ watch(currentId, (id) => {
   if (id === "cicd") loadReleases();
   if (id === "db") loadDb();
 });
+
+const keptToken = sessionStorage.getItem("xuntai-token");
+if (keptToken) {
+  token.value = keptToken;
+  fetch("/api/base/me", { headers: { Authorization: `Bearer ${keptToken}` } })
+    .then(async (me) => {
+      if (!me.ok) {
+        logout();
+        return;
+      }
+      session.value = await me.json();
+      await loadTree();
+      await loadTickets();
+      await loadTasks();
+      await loadMonitor();
+      await loadK8s();
+      await loadReleases();
+      await loadDb();
+    })
+    .catch(() => {
+      loginError.value = "登录服务没有启动";
+    });
+}
 </script>
 
 <template>
@@ -768,7 +856,7 @@ watch(currentId, (id) => {
         <p>写操作看这里的负责人，不看菜单藏没藏。</p>
       </header>
       <ul>
-        <li v-for="item in tree" :key="item.id" :class="item.depth ? 'depth-1' : ''">
+        <li v-for="item in sideNodes" :key="item.id" :class="item.depth ? 'depth-1' : ''">
           <button
             :class="{ selected: item.id === nodeId }"
             @click="nodeId = item.id"
@@ -783,11 +871,12 @@ watch(currentId, (id) => {
       <header>
         <div>
           <h1>{{ current.name }}</h1>
-          <p>{{ current.summary }} 当前节点是{{ labelOf(nodeId) }}。</p>
+          <p>{{ current.summary }} 当前节点是{{ nodeTitle() }}。</p>
         </div>
         <div class="who">
-          <b>周宁</b>
-          基础架构运维负责人
+          <b>{{ session ? session.name : "周宁" }}</b>
+          {{ session ? (session.roles || []).join("、") : "基础架构运维负责人" }}
+          <button v-if="session" type="button" @click="logout">退出</button>
         </div>
       </header>
 
@@ -1023,7 +1112,7 @@ watch(currentId, (id) => {
                   <tr><th>任务</th><th>发现</th><th>目标</th></tr>
                 </thead>
                 <tbody>
-                  <tr v-for="row in (session ? liveScrapeJobs : jobRows)" :key="row.id || row.name">
+                  <tr v-for="row in shownScrapeJobs" :key="row.id || row.name">
                     <td>{{ row.name }}</td>
                     <td>{{ discoverText(row) }}</td>
                     <td>{{ targetText(row) }}</td>
@@ -1104,7 +1193,7 @@ watch(currentId, (id) => {
           <template v-else-if="session">
             <form class="login" @submit.prevent="saveInstance">
               <select v-model="k8sInstanceId" aria-label="实例" @change="k8sImage = (liveInstances.find((item) => String(item.id) === k8sInstanceId) || {}).image || ''">
-                <option v-for="item in liveInstances" :key="item.id" :value="String(item.id)">{{ item.appName }} · {{ item.env }}</option>
+                <option v-for="item in shownInstances" :key="item.id" :value="String(item.id)">{{ item.appName }} · {{ item.env }}</option>
               </select>
               <input v-model="k8sImage" aria-label="镜像" placeholder="镜像" />
               <input v-model="k8sTicketId" aria-label="工单号" placeholder="生产工单号" />
@@ -1116,7 +1205,7 @@ watch(currentId, (id) => {
                 <tr><th>应用</th><th>节点</th><th>集群</th><th>环境</th><th>镜像</th><th>副本</th></tr>
               </thead>
               <tbody>
-                <tr v-for="row in liveInstances" :key="row.id">
+                <tr v-for="row in shownInstances" :key="row.id">
                   <td>{{ row.appName }}</td>
                   <td>{{ row.nodeName }}</td>
                   <td>{{ row.cluster }}</td>
@@ -1146,7 +1235,7 @@ watch(currentId, (id) => {
         <template v-else-if="currentId === 'cicd'">
           <form v-if="session" class="login" @submit.prevent="createRelease">
             <select v-model="releaseItemId" aria-label="发布项">
-              <option v-for="item in liveItems" :key="item.id" :value="String(item.id)">{{ item.name }}</option>
+              <option v-for="item in shownItems" :key="item.id" :value="String(item.id)">{{ item.name }}</option>
             </select>
             <select v-model="releaseEnv" aria-label="环境">
               <option value="开发">开发</option>
@@ -1160,7 +1249,7 @@ watch(currentId, (id) => {
           <p v-if="session" class="note">开发环境提交后直接完成。生产停在阶段上等人确认，通过后把标签写进实例。回到旧版本是再发那个标签。</p>
           <p v-else class="note">生产单停在阶段之间等人确认。开发环境不进这个表。</p>
           <template v-if="session">
-            <article v-for="row in liveReleases" :key="row.id" style="margin-bottom: 18px">
+            <article v-for="row in shownReleases" :key="row.id" style="margin-bottom: 18px">
               <strong>{{ row.id }} {{ row.itemName }}</strong>
               <p class="note">{{ row.nodeName }} · {{ row.env }} · {{ row.tag }} · {{ row.status === "finished" ? "已完成" : "等待确认" }}</p>
               <div class="stages">
@@ -1211,7 +1300,7 @@ watch(currentId, (id) => {
                 <tr><th>实例</th><th>节点</th><th>地址</th><th>版本</th><th>角色</th><th>主库</th><th>复制</th></tr>
               </thead>
               <tbody>
-                <tr v-for="row in liveDb" :key="row.id">
+                <tr v-for="row in shownDb" :key="row.id">
                   <td>{{ row.name }}</td>
                   <td>{{ row.nodeName }}</td>
                   <td>{{ row.host }}:{{ row.port }}</td>
@@ -1224,7 +1313,7 @@ watch(currentId, (id) => {
             </table>
             <form class="login" @submit.prevent="createBackup">
               <select v-model="backupInstanceId" aria-label="备份实例">
-                <option v-for="item in liveDb" :key="item.id" :value="String(item.id)">{{ item.name }}</option>
+                <option v-for="item in shownDb" :key="item.id" :value="String(item.id)">{{ item.name }}</option>
               </select>
               <select v-model="backupKind" aria-label="备份类型">
                 <option value="全量">全量</option>
@@ -1238,7 +1327,7 @@ watch(currentId, (id) => {
                 <tr><th>实例</th><th>类型</th><th>工具</th><th>保留</th><th>状态</th></tr>
               </thead>
               <tbody>
-                <tr v-for="row in liveBackups" :key="row.id">
+                <tr v-for="row in shownBackups" :key="row.id">
                   <td>{{ row.instanceName }}</td>
                   <td>{{ row.kind }}</td>
                   <td>{{ row.tool }}</td>
@@ -1249,10 +1338,10 @@ watch(currentId, (id) => {
             </table>
             <form class="login" @submit.prevent="createRestore">
               <select v-model="restoreBackupId" aria-label="备份">
-                <option v-for="item in liveBackups" :key="item.id" :value="String(item.id)">{{ item.instanceName }} · {{ item.kind }}</option>
+                <option v-for="item in shownBackups" :key="item.id" :value="String(item.id)">{{ item.instanceName }} · {{ item.kind }}</option>
               </select>
               <select v-model="restoreInstanceId" aria-label="还原到">
-                <option v-for="item in liveDb" :key="item.id" :value="String(item.id)">{{ item.name }}</option>
+                <option v-for="item in shownDb" :key="item.id" :value="String(item.id)">{{ item.name }}</option>
               </select>
               <input v-model="restoreTicketId" aria-label="工单号" placeholder="工单号" />
               <button type="submit">登记还原</button>
@@ -1263,7 +1352,7 @@ watch(currentId, (id) => {
                 <tr><th>备份</th><th>实例</th><th>工单</th><th>状态</th></tr>
               </thead>
               <tbody>
-                <tr v-for="row in liveRestores" :key="row.id">
+                <tr v-for="row in shownRestores" :key="row.id">
                   <td>{{ row.backupId }}</td>
                   <td>{{ row.instanceName }}</td>
                   <td>{{ row.ticketId }}</td>

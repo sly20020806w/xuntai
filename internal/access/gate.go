@@ -77,7 +77,7 @@ func (g *Gate) Allow(roles []string, path, method string) bool {
 	return false
 }
 
-func Middleware(secret string, gate *Gate) gin.HandlerFunc {
+func Middleware(secret string, gate *Gate, db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if isPublic(c.Request.Method, c.Request.URL.Path) {
 			c.Next()
@@ -88,9 +88,22 @@ func Middleware(secret string, gate *Gate) gin.HandlerFunc {
 			c.AbortWithStatusJSON(401, gin.H{"error": "需要登录"})
 			return
 		}
-		c.Set("uid", claims.UID)
-		c.Set("name", claims.Name)
-		if gate == nil || !gate.Allow(claims.Roles, c.Request.URL.Path, c.Request.Method) {
+		if db == nil {
+			c.AbortWithStatusJSON(401, gin.H{"error": "登录状态已失效"})
+			return
+		}
+		var user model.User
+		if err := db.Preload("Roles").First(&user, claims.UID).Error; err != nil {
+			c.AbortWithStatusJSON(401, gin.H{"error": "登录状态已失效"})
+			return
+		}
+		roles := make([]string, 0, len(user.Roles))
+		for _, role := range user.Roles {
+			roles = append(roles, role.Name)
+		}
+		c.Set("uid", user.ID)
+		c.Set("name", user.Name)
+		if gate == nil || !gate.Allow(roles, c.Request.URL.Path, c.Request.Method) {
 			c.AbortWithStatusJSON(403, gin.H{"error": "没有权限"})
 			return
 		}

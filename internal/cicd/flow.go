@@ -89,8 +89,12 @@ func Confirm(db *gorm.DB, orderID uint) error {
 		if current == nil {
 			return ErrNoStage
 		}
-		if err := tx.Model(current).Update("status", "done").Error; err != nil {
-			return err
+		res := tx.Model(&model.ReleaseStage{}).Where("id = ? AND status = ?", current.ID, "pending").Update("status", "done")
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			return ErrNoStage
 		}
 		var item model.DeployItem
 		if err := tx.First(&item, order.ItemID).Error; err != nil {

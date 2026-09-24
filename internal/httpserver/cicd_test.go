@@ -161,6 +161,9 @@ func TestReleaseStagesAndRepublish(t *testing.T) {
 	if imageOf(t, engine, xu, "order-api", "生产") != "order-api:1.8.3" {
 		t.Fatal("再发旧标签后镜像没有回去")
 	}
+	if rec := postJSON(engine, fmt.Sprintf("/api/cicd/orders/%d/confirm", again.ID), "", lin); rec.Code != http.StatusBadRequest {
+		t.Fatalf("重复确认 = %d %s", rec.Code, rec.Body.String())
+	}
 }
 
 type orderJSON struct {
