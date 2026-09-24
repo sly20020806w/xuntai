@@ -61,6 +61,13 @@ const k8sInstanceId = ref("");
 const k8sImage = ref("");
 const k8sTicketId = ref("");
 const k8sError = ref("");
+const liveReleases = ref([]);
+const liveItems = ref([]);
+const releaseItemId = ref("");
+const releaseTag = ref("");
+const releaseEnv = ref("生产");
+const releaseTicketId = ref("");
+const releaseError = ref("");
 
 const current = computed(() => modules.find((item) => item.id === currentId.value));
 const node = computed(() => tree.find((item) => item.id === nodeId.value));
@@ -115,6 +122,10 @@ async function login() {
     await loadTasks();
     await loadMonitor();
     await loadK8s();
+    await loadReleases();
+  } catch {
+    loginError.value = "登录服务没有启动";
+  }
 }
 
 async function loadTree() {
@@ -486,12 +497,94 @@ async function saveInstance() {
   }
 }
 
+async function loadReleases() {
+  if (!token.value) return;
+  releaseError.value = "";
+  try {
+    const headers = { Authorization: `Bearer ${token.value}` };
+    const [ordersRes, itemsRes] = await Promise.all([
+      fetch("/api/cicd/orders", { headers }),
+      fetch("/api/cicd/items", { headers }),
+    ]);
+    if (!ordersRes.ok || !itemsRes.ok) {
+      releaseError.value = "发布没有读出来";
+      return;
+    }
+    liveReleases.value = await ordersRes.json();
+    liveItems.value = await itemsRes.json();
+    if (!liveItems.value.some((item) => String(item.id) === releaseItemId.value)) {
+      const order = liveItems.value.find((item) => item.name === "order-api");
+      releaseItemId.value = String((order || liveItems.value[0] || {}).id || "");
+    }
+  } catch {
+    releaseError.value = "登录服务没有启动";
+  }
+}
+
+async function createRelease() {
+  releaseError.value = "";
+  if (!releaseTag.value.trim()) {
+    releaseError.value = "先写标签";
+    return;
+  }
+  try {
+    const res = await fetch("/api/cicd/orders", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token.value}`,
+      },
+      body: JSON.stringify({
+        itemId: Number(releaseItemId.value),
+        tag: releaseTag.value.trim(),
+        env: releaseEnv.value,
+        ticketId: Number(releaseTicketId.value) || 0,
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      releaseError.value = data.error || "发布没有建成";
+      return;
+    }
+    releaseTag.value = "";
+    releaseTicketId.value = "";
+    await loadReleases();
+  } catch {
+    releaseError.value = "登录服务没有启动";
+  }
+}
+
+async function confirmRelease(id) {
+  releaseError.value = "";
+  try {
+    const res = await fetch(`/api/cicd/orders/${id}/confirm`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token.value}` },
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      releaseError.value = data.error || "阶段没有确认";
+      return;
+    }
+    await loadReleases();
+  } catch {
+    releaseError.value = "登录服务没有启动";
+  }
+}
+
+function stageClass(order, stage) {
+  if (stage.status === "done") return "done";
+  const current = (order.stages || []).find((item) => item.status === "pending");
+  return current && current.name === stage.name ? "now" : "";
+}
+
 watch(currentId, (id) => {
   if (id === "tree" || id === "ticket" || id === "task" || id === "monitor") loadTree();
   if (id === "ticket") loadTickets();
   if (id === "task") loadTasks();
   if (id === "monitor") loadMonitor();
   if (id === "k8s") loadK8s();
+  if (id === "cicd") loadReleases();
 });
 </script>
 
@@ -897,16 +990,44 @@ watch(currentId, (id) => {
         </template>
 
         <template v-else-if="currentId === 'cicd'">
-          <p class="note">生产单停在阶段之间等人确认。开发环境不进这个表。</p>
-          <article v-for="row in releaseRows" :key="row.id" style="margin-bottom: 18px">
-            <strong>{{ row.id }} {{ row.name }}</strong>
-            <p class="note">{{ labelOf(row.nodeId) }} · {{ row.env }} · {{ row.tag }} · {{ row.stage }}</p>
-            <div class="stages">
-              <span class="done">构建</span>
-              <span class="done">预发</span>
-              <span :class="row.env === '生产' ? 'now' : 'done'">生产</span>
-            </div>
-          </article>
+          <form v-if="session" class="login" @submit.prevent="createRelease">
+            <select v-model="releaseItemId" aria-label="发布项">
+              <option v-for="item in liveItems" :key="item.id" :value="String(item.id)">{{ item.name }}</option>
+            </select>
+            <select v-model="releaseEnv" aria-label="环境">
+              <option value="开发">开发</option>
+              <option value="生产">生产</option>
+            </select>
+            <input v-model="releaseTag" aria-label="标签" placeholder="标签" />
+            <input v-model="releaseTicketId" aria-label="工单号" placeholder="生产工单号" />
+            <button type="submit">发布</button>
+            <span v-if="releaseError">{{ releaseError }}</span>
+          </form>
+          <p v-if="session" class="note">开发环境提交后直接完成。生产停在阶段上等人确认，通过后把标签写进实例。回到旧版本是再发那个标签。</p>
+          <p v-else class="note">生产单停在阶段之间等人确认。开发环境不进这个表。</p>
+          <template v-if="session">
+            <article v-for="row in liveReleases" :key="row.id" style="margin-bottom: 18px">
+              <strong>{{ row.id }} {{ row.itemName }}</strong>
+              <p class="note">{{ row.nodeName }} · {{ row.env }} · {{ row.tag }} · {{ row.status === "finished" ? "已完成" : "等待确认" }}</p>
+              <div class="stages">
+                <span v-for="stage in row.stages" :key="stage.seq" :class="stageClass(row, stage)">{{ stage.name }}</span>
+              </div>
+              <div v-if="row.status !== 'finished'" class="row-actions">
+                <button @click="confirmRelease(row.id)">确认当前阶段</button>
+              </div>
+            </article>
+          </template>
+          <template v-else>
+            <article v-for="row in releaseRows" :key="row.id" style="margin-bottom: 18px">
+              <strong>{{ row.id }} {{ row.name }}</strong>
+              <p class="note">{{ labelOf(row.nodeId) }} · {{ row.env }} · {{ row.tag }} · {{ row.stage }}</p>
+              <div class="stages">
+                <span class="done">构建</span>
+                <span class="done">预发</span>
+                <span :class="row.env === '生产' ? 'now' : 'done'">生产</span>
+              </div>
+            </article>
+          </template>
         </template>
 
         <template v-else>

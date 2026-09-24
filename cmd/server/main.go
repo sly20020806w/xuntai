@@ -11,12 +11,14 @@ import (
 
 	"xuntai/internal/access"
 	apibase "xuntai/internal/api/base"
+	apicicd "xuntai/internal/api/cicd"
 	apik8s "xuntai/internal/api/k8s"
 	apimonitor "xuntai/internal/api/monitor"
 	apitask "xuntai/internal/api/task"
 	apiticket "xuntai/internal/api/ticket"
 	apitree "xuntai/internal/api/tree"
 	"xuntai/internal/base"
+	"xuntai/internal/cicd"
 	"xuntai/internal/config"
 	"xuntai/internal/httpserver"
 	"xuntai/internal/k8s"
@@ -82,6 +84,13 @@ func main() {
 	if k8sReady {
 		log.Printf("已补上集群示例")
 	}
+	cicdReady, err := cicd.Seed(db)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if cicdReady {
+		log.Printf("已补上发布示例")
+	}
 	gate := access.New()
 	if err := gate.Reload(db); err != nil {
 		log.Fatal(err)
@@ -93,6 +102,7 @@ func main() {
 		Task:    apitask.Deps{DB: db},
 		Monitor: apimonitor.Deps{DB: db},
 		K8s:     apik8s.Deps{DB: db},
+		Cicd:    apicicd.Deps{DB: db},
 	}); err != nil {
 		log.Fatal(err)
 	}

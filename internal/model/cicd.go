@@ -13,11 +13,12 @@ type DeployItem struct {
 func (DeployItem) TableName() string { return "cicd_deploy_items" }
 
 type ReleaseOrder struct {
-	ID     uint   `gorm:"primaryKey"`
-	ItemID uint   `gorm:"not null"`
-	Tag    string `gorm:"size:128"`
-	Env    string `gorm:"size:32"`
-	Status string `gorm:"size:32"`
+	ID       uint   `gorm:"primaryKey"`
+	ItemID   uint   `gorm:"not null"`
+	Tag      string `gorm:"size:128"`
+	Env      string `gorm:"size:32"`
+	Status   string `gorm:"size:32"`
+	TicketID uint
 }
 
 func (ReleaseOrder) TableName() string { return "cicd_orders" }
