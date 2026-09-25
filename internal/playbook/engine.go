@@ -11,6 +11,7 @@ import (
 
 	"xuntai/internal/cicd"
 	"xuntai/internal/model"
+	"xuntai/internal/monitor"
 )
 
 var activeStatus = []string{"pending", "running", "paused"}
@@ -309,6 +310,10 @@ func Cancel(db *gorm.DB, runID uint) error {
 	if err := setRunStatus(db, run.ID, []string{"running", "paused"}, "cancelled"); err != nil {
 		return err
 	}
+	run.Status = "cancelled"
+	if err := monitor.NoteRun(db, &run); err != nil {
+		return err
+	}
 	return appendAudit(db, run.ID, "已取消")
 }
 
@@ -523,6 +528,10 @@ func finishRun(db *gorm.DB, run *model.Run, status string) error {
 		if errors.Is(err, ErrTerminal) {
 			return nil
 		}
+		return err
+	}
+	run.Status = status
+	if err := monitor.NoteRun(db, run); err != nil {
 		return err
 	}
 	if status != "success" {

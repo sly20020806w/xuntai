@@ -52,15 +52,17 @@ type SendGroup struct {
 func (SendGroup) TableName() string { return "monitor_send_groups" }
 
 type AlertRule struct {
-	ID          uint   `gorm:"primaryKey"`
-	Name        string `gorm:"size:128;not null"`
-	Expr        string `gorm:"type:text"`
-	Level       string `gorm:"size:32"`
-	PoolID      uint   `gorm:"not null"`
-	SendGroupID uint   `gorm:"not null"`
-	TreeNodeID  uint
-	AppID       uint
-	ObjectID    uint
+	ID            uint   `gorm:"primaryKey"`
+	Name          string `gorm:"size:128;not null"`
+	Expr          string `gorm:"type:text"`
+	Level         string `gorm:"size:32"`
+	PoolID        uint   `gorm:"not null"`
+	SendGroupID   uint   `gorm:"not null"`
+	TreeNodeID    uint
+	AppID         uint
+	ObjectID      uint
+	PlaybookID    uint
+	InputTemplate string `gorm:"type:text"`
 }
 
 func (AlertRule) TableName() string { return "monitor_alert_rules" }
@@ -74,7 +76,7 @@ type AlertEvent struct {
 
 func (AlertEvent) TableName() string { return "monitor_alert_events" }
 
-// AlertAction 记下对某条告警的认领、屏蔽或升级。
+// AlertAction 记下认领、屏蔽、升级，以及剧本绑定和自愈执行。
 type AlertAction struct {
 	ID          uint   `gorm:"primaryKey"`
 	Fingerprint string `gorm:"size:128;index"`
@@ -83,6 +85,10 @@ type AlertAction struct {
 	Action      string `gorm:"size:16"`
 	ActorID     uint
 	OwnerID     uint
+	RunID       uint
+	RuleID      uint
+	RunStatus   string `gorm:"size:32"`
+	Detail      string `gorm:"type:text"`
 }
 
 func (AlertAction) TableName() string { return "monitor_alert_actions" }

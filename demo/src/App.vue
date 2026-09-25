@@ -1175,7 +1175,7 @@ if (keptToken) {
           <h2 class="panel-title">告警</h2>
           <table v-if="session">
             <thead>
-              <tr><th>规则</th><th>节点</th><th>采集池</th><th>发送组</th><th>级别</th><th>状态</th></tr>
+              <tr><th>规则</th><th>节点</th><th>采集池</th><th>发送组</th><th>级别</th><th>状态</th><th>剧本</th></tr>
             </thead>
             <tbody>
               <tr v-for="row in shownRules" :key="row.id">
@@ -1185,6 +1185,7 @@ if (keptToken) {
                 <td>{{ row.sendGroupName }}</td>
                 <td>{{ row.level }}</td>
                 <td>{{ alertState[row.status] || "" }}</td>
+                <td>{{ row.playbookName || "—" }}</td>
               </tr>
             </tbody>
           </table>

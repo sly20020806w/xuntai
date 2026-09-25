@@ -11,6 +11,7 @@ import (
 
 	"xuntai/internal/model"
 	moncore "xuntai/internal/monitor"
+	playcore "xuntai/internal/playbook"
 	"xuntai/internal/scope"
 	"xuntai/internal/tree"
 )
@@ -334,6 +335,15 @@ func (h handler) listRules(c *gin.Context) {
 	for _, event := range events {
 		status[event.RuleID] = event.Status
 	}
+	bookNames := map[uint]string{}
+	var books []model.Playbook
+	if err := h.deps.DB.Find(&books).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "剧本读取失败"})
+		return
+	}
+	for _, book := range books {
+		bookNames[book.ID] = book.Name
+	}
 	out := make([]gin.H, 0, len(rules))
 	for _, rule := range rules {
 		if !h.keepBinding(ids, all, rule.AppID, rule.ObjectID) {
@@ -345,7 +355,8 @@ func (h handler) listRules(c *gin.Context) {
 			"sendgroup_id": rule.SendGroupID, "status": status[rule.ID],
 			"nodeId": rule.TreeNodeID, "nodeName": names[rule.TreeNodeID],
 			"objectId": rule.ObjectID, "objectName": objects[rule.ObjectID],
-			"appId": rule.AppID,
+			"appId":      rule.AppID,
+			"playbookId": rule.PlaybookID, "playbookName": bookNames[rule.PlaybookID],
 		})
 	}
 	c.JSON(http.StatusOK, out)
@@ -355,55 +366,26 @@ func (h handler) createRule(c *gin.Context) {
 	if !h.ready(c) {
 		return
 	}
-	var body struct {
-		Name        string `json:"name"`
-		Expr        string `json:"expr"`
-		Level       string `json:"level"`
-		PoolID      uint   `json:"poolId"`
-		SendGroupID uint   `json:"sendGroupId"`
-		TreeNodeID  uint   `json:"treeNodeId"`
-		AppID       uint   `json:"appId"`
-		ObjectID    uint   `json:"objectId"`
-	}
-	if err := c.ShouldBindJSON(&body); err != nil || strings.TrimSpace(body.Name) == "" || strings.TrimSpace(body.Expr) == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "需要规则名和表达式"})
+	body, pool, group, ok := h.readRule(c)
+	if !ok || !h.requireOps(c, body.TreeNodeID) || !h.place(c, body.TreeNodeID, body.AppID, body.ObjectID) {
 		return
 	}
-	if body.Level != "紧急" && body.Level != "警告" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "级别只能是紧急或警告"})
-		return
-	}
-	var pool model.ScrapePool
-	if err := h.deps.DB.First(&pool, body.PoolID).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "没有这个采集池"})
-		return
-	}
-	if !pool.SupportAlert {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "这个采集池不产生告警"})
-		return
-	}
-	var group model.SendGroup
-	if err := h.deps.DB.First(&group, body.SendGroupID).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "没有这个发送组"})
-		return
-	}
-	if body.TreeNodeID == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "需要节点"})
-		return
-	}
-	if !h.requireOps(c, body.TreeNodeID) {
-		return
-	}
-	if !h.place(c, body.TreeNodeID, body.AppID, body.ObjectID) {
+	playbookID := body.chosenPlaybook(0)
+	template := body.chosenTemplate("")
+	if !h.acceptPlaybook(c, playbookID, template) {
 		return
 	}
 	row := model.AlertRule{
 		Name: strings.TrimSpace(body.Name), Expr: strings.TrimSpace(body.Expr), Level: body.Level,
 		PoolID: pool.ID, SendGroupID: group.ID, TreeNodeID: body.TreeNodeID,
 		AppID: body.AppID, ObjectID: body.ObjectID,
+		PlaybookID: playbookID, InputTemplate: template,
 	}
 	if err := h.deps.DB.Create(&row).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "规则没有建成"})
+		return
+	}
+	if (playbookID != 0 || template != "") && !h.noteBind(c, row) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"id": row.ID, "name": row.Name, "sendgroup_id": row.SendGroupID})
@@ -423,13 +405,27 @@ func (h handler) updateRule(c *gin.Context) {
 	if !ok || !h.requireOps(c, body.TreeNodeID) || !h.place(c, body.TreeNodeID, body.AppID, body.ObjectID) {
 		return
 	}
+	playbookID := body.chosenPlaybook(row.PlaybookID)
+	template := body.chosenTemplate(row.InputTemplate)
+	if !h.acceptPlaybook(c, playbookID, template) {
+		return
+	}
+	changed := row.PlaybookID != playbookID || strings.TrimSpace(row.InputTemplate) != template
 	err = h.deps.DB.Model(&row).Updates(map[string]any{
 		"name": strings.TrimSpace(body.Name), "expr": strings.TrimSpace(body.Expr), "level": body.Level,
 		"pool_id": pool.ID, "send_group_id": group.ID, "tree_node_id": body.TreeNodeID,
 		"app_id": body.AppID, "object_id": body.ObjectID,
+		"playbook_id": playbookID, "input_template": template,
 	}).Error
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "规则没有改成"})
+		return
+	}
+	row.PlaybookID = playbookID
+	row.InputTemplate = template
+	row.TreeNodeID = body.TreeNodeID
+	row.ObjectID = body.ObjectID
+	if changed && !h.noteBind(c, row) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"id": row.ID, "name": strings.TrimSpace(body.Name), "objectId": body.ObjectID, "appId": body.AppID})
@@ -444,9 +440,23 @@ func (h handler) webhook(c *gin.Context) {
 	for _, owner := range owners {
 		out = append(out, gin.H{"id": owner.ID, "name": owner.Name})
 	}
-	c.JSON(http.StatusOK, gin.H{
+	resp := gin.H{
 		"fingerprint": body.Fingerprint, "nodeId": nodeID, "objectId": body.ObjectID, "owners": out,
-	})
+	}
+	if body.RuleID == 0 {
+		c.JSON(http.StatusOK, resp)
+		return
+	}
+	// 告警的唯一副作用是创建预授权剧本的 Run，不直接调用任务、发布、集群或数据库变更。
+	extra, err := h.startHeal(c, body, nodeID, owners)
+	if err != nil {
+		h.writeHeal(c, err)
+		return
+	}
+	for key, val := range extra {
+		resp[key] = val
+	}
+	c.JSON(http.StatusOK, resp)
 }
 
 func (h handler) assign(c *gin.Context)   { h.record(c, "assign") }
@@ -511,6 +521,9 @@ func (h handler) listActions(c *gin.Context) {
 		}
 		query = query.Where("owner_id = ?", id)
 	}
+	if raw := strings.TrimSpace(c.Query("fingerprint")); raw != "" {
+		query = query.Where("fingerprint = ?", raw)
+	}
 	var rows []model.AlertAction
 	if err := query.Find(&rows).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "处理记录读取失败"})
@@ -527,20 +540,23 @@ func (h handler) listActions(c *gin.Context) {
 			"objectId": row.ObjectID, "objectName": objects[row.ObjectID],
 			"ownerId": row.OwnerID, "ownerName": users[row.OwnerID],
 			"actorId": row.ActorID, "actorName": users[row.ActorID],
+			"runId": row.RunID, "ruleId": row.RuleID, "runStatus": row.RunStatus, "detail": row.Detail,
 		})
 	}
 	c.JSON(http.StatusOK, out)
 }
 
 type ruleBody struct {
-	Name        string `json:"name"`
-	Expr        string `json:"expr"`
-	Level       string `json:"level"`
-	PoolID      uint   `json:"poolId"`
-	SendGroupID uint   `json:"sendGroupId"`
-	TreeNodeID  uint   `json:"treeNodeId"`
-	AppID       uint   `json:"appId"`
-	ObjectID    uint   `json:"objectId"`
+	Name          string  `json:"name"`
+	Expr          string  `json:"expr"`
+	Level         string  `json:"level"`
+	PoolID        uint    `json:"poolId"`
+	SendGroupID   uint    `json:"sendGroupId"`
+	TreeNodeID    uint    `json:"treeNodeId"`
+	AppID         uint    `json:"appId"`
+	ObjectID      uint    `json:"objectId"`
+	PlaybookID    *uint   `json:"playbookId"`
+	InputTemplate *string `json:"inputTemplate"`
 }
 
 type groupBody struct {
@@ -555,6 +571,22 @@ type alertBody struct {
 	NodeID      uint   `json:"nodeId"`
 	ObjectID    uint   `json:"objectId"`
 	OwnerID     uint   `json:"ownerId"`
+	RuleID      uint   `json:"ruleId"`
+	Summary     string `json:"summary"`
+}
+
+func (b ruleBody) chosenPlaybook(prev uint) uint {
+	if b.PlaybookID == nil {
+		return prev
+	}
+	return *b.PlaybookID
+}
+
+func (b ruleBody) chosenTemplate(prev string) string {
+	if b.InputTemplate == nil {
+		return strings.TrimSpace(prev)
+	}
+	return strings.TrimSpace(*b.InputTemplate)
 }
 
 func (h handler) readRule(c *gin.Context) (ruleBody, model.ScrapePool, model.SendGroup, bool) {
@@ -636,6 +668,91 @@ func (h handler) openAlert(c *gin.Context) (alertBody, uint, []model.User, bool)
 		return body, 0, nil, false
 	}
 	return body, nodeID, owners, true
+}
+
+func (h handler) acceptPlaybook(c *gin.Context, playbookID uint, template string) bool {
+	if err := moncore.CheckBinding(h.deps.DB, playbookID, template); err != nil {
+		h.writeHeal(c, err)
+		return false
+	}
+	return true
+}
+
+func (h handler) noteBind(c *gin.Context, rule model.AlertRule) bool {
+	row := model.AlertAction{
+		TreeNodeID: rule.TreeNodeID, ObjectID: rule.ObjectID, Action: "bind",
+		ActorID: c.GetUint("uid"), RuleID: rule.ID,
+		Detail: strconv.FormatUint(uint64(rule.PlaybookID), 10),
+	}
+	if err := h.deps.DB.Create(&row).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "绑定没有记上"})
+		return false
+	}
+	return true
+}
+
+func (h handler) startHeal(c *gin.Context, body alertBody, nodeID uint, owners []model.User) (gin.H, error) {
+	var rule model.AlertRule
+	if err := h.deps.DB.First(&rule, body.RuleID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, moncore.ErrNoRule
+		}
+		return nil, err
+	}
+	if err := moncore.RuleFits(h.deps.DB, rule, nodeID, body.ObjectID); err != nil {
+		return nil, err
+	}
+	if rule.PlaybookID == 0 {
+		return gin.H{"started": false}, nil
+	}
+	var book model.Playbook
+	if err := h.deps.DB.First(&book, rule.PlaybookID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return gin.H{"started": false, "healError": moncore.ErrNoPlaybook.Error()}, nil
+		}
+		return nil, err
+	}
+	if book.Status != "published" {
+		return gin.H{"started": false, "healError": moncore.ErrUnpublished.Error()}, nil
+	}
+	input, err := moncore.Render(rule.InputTemplate, moncore.AlertVars{
+		TreeNodeID: nodeID, ObjectID: body.ObjectID, RuleName: rule.Name,
+		Fingerprint: body.Fingerprint, Summary: body.Summary,
+	})
+	if err != nil {
+		return gin.H{"started": false, "healError": err.Error()}, nil
+	}
+	run, err := playcore.Start(h.deps.DB, book.Code, c.GetUint("uid"), body.Fingerprint, input, "")
+	if errors.Is(err, playcore.ErrConflict) {
+		return gin.H{"started": false, "runId": run.ID, "runStatus": run.Status}, nil
+	}
+	if err != nil {
+		return gin.H{"started": false, "healError": err.Error()}, nil
+	}
+	detail := ""
+	if run.Status == "failed" || run.Status == "cancelled" {
+		detail = moncore.StepError(h.deps.DB, run.ID)
+	}
+	row := model.AlertAction{
+		Fingerprint: body.Fingerprint, TreeNodeID: nodeID, ObjectID: body.ObjectID,
+		Action: "heal", ActorID: c.GetUint("uid"), OwnerID: owners[0].ID,
+		RunID: run.ID, RuleID: rule.ID, RunStatus: run.Status, Detail: detail,
+	}
+	if err := h.deps.DB.Create(&row).Error; err != nil {
+		return nil, err
+	}
+	return gin.H{"started": true, "runId": run.ID, "runStatus": run.Status}, nil
+}
+
+func (h handler) writeHeal(c *gin.Context, err error) {
+	switch {
+	case errors.Is(err, moncore.ErrNoPlaybook), errors.Is(err, moncore.ErrNoRule):
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+	case errors.Is(err, moncore.ErrUnpublished), errors.Is(err, moncore.ErrTemplate), errors.Is(err, moncore.ErrTemplateVar), errors.Is(err, moncore.ErrRuleNode), errors.Is(err, moncore.ErrRuleObject):
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+	default:
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "自愈没有记上"})
+	}
 }
 
 func (h handler) place(c *gin.Context, nodeID, appID, objectID uint) bool {

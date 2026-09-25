@@ -1,0 +1,70 @@
+# 故障自愈
+
+告警要自动处理时，只走预授权剧本。规则绑定一个已发布的 Playbook，webhook 收到告警后创建并启动一次 Run。处理动作写在剧本步骤里。告警入口不直接调用任务、发布、集群或数据库变更。
+
+## 绑定
+
+`monitor_alert_rules.playbook_id` 为 0 表示不绑定。只能填已发布的剧本。未发布或不存在时，创建和修改都拒绝。`input_template` 可空；空则只用下面的默认入参。
+
+绑定或模板有变化时，在 `monitor_alert_actions` 记一条 `action=bind`，`detail` 是当时的剧本编号。写权限仍是节点运维判断，平台管理员不绕过这一层。
+
+修改规则时，请求里不带 `playbookId` 或 `inputTemplate`，就保持原来的值。要解开绑定，显式传 `playbookId: 0`。
+
+## 触发链路
+
+`POST /api/monitor/alerts/webhook`。
+
+1. 和以前一样定位节点、核对运维权限、找出负责人。
+2. 请求里没有 `ruleId`：到此为止，只返回负责人。
+3. 有 `ruleId`：规则必须盖住这次告警的节点。规则和告警都带了对象时，对象必须相同，否则拒绝，不建 Run。
+4. 规则没有剧本：仍只返回负责人，`started` 为 false，不建 Run。
+5. 剧本后来被下线或不存在：仍返回负责人，并带 `healError`，不建 Run。
+6. 剧本仍是已发布：用告警指纹做幂等键，调用剧本启动。触发人是这次 webhook 的登录用户。
+
+代码里这次请求的唯一副作用是 `playbook.Start`。Run 里的步骤要调任务、发布或集群，由剧本自己走，不从 webhook 另开一条路。
+
+验收用模拟 payload 直调这个接口，并带上 `ruleId`。没有接真实 Alertmanager。
+
+## 入参模板
+
+默认入参：
+
+- `tree_node_id`
+- `object_id`
+- `rule_name`
+- `fingerprint`
+- `summary`（来自 webhook 的 `summary`，可空）
+
+模板是一个 JSON 对象。可用占位符只有 `{{tree_node_id}}`、`{{object_id}}`、`{{rule_name}}`、`{{fingerprint}}`、`{{summary}}`。某一项的值整段正好是 `{{tree_node_id}}` 或 `{{object_id}}` 时，写入数字；写在句子里时，换成文字。其它 `{{...}}` 在保存时拒绝。模板不是对象也拒绝。
+
+合并之后，上面五项以这次告警为准，模板改不了。模板里的其它字段会保留。例如：
+
+```json
+{"service":"order","note":"处理 {{rule_name}}"}
+```
+
+`summary` 这项同样以告警为准。句子里的 `{{summary}}` 会换成告警摘要。
+
+## 幂等
+
+沿用剧本现有幂等：同一个剧本、同一个幂等键，已有未结束的 Run（`pending` / `running` / `paused`）时不再启动。
+
+Webhook 遇到这种情况仍返回 200，`started` 为 false，并带上已有的 `runId`。不把整次 webhook 变成 409，负责人查找仍然成功。剧本自己的启动接口碰到同样的键，仍是 409。
+
+Run 到 `success`、`failed` 或 `cancelled` 之后，同一指纹可以再启动一次。会新开一条 Run，并再记一条自愈记录。
+
+## 结果
+
+自愈记在 `monitor_alert_actions`，`action=heal`。带 `runId`、`ruleId`、`runStatus`、`detail`。可按指纹、对象或负责人查询。认领、屏蔽、升级的字段不变。
+
+记录写在 Run 启动之后。若剧本在启动过程中已经结束，记下的就是终态，失败时 `detail` 是步骤错误。之后 Run 再到 `success`、`failed` 或 `cancelled`，回写同一条记录的 `runStatus`。失败和取消把最后一条非空步骤错误写入 `detail`。取消时这条错误是 `cancelled`。
+
+同一指纹在未结束时重复告警，不新增自愈记录。终态之后再次触发，会多一条。
+
+## 未绑定
+
+`playbook_id` 为 0，或请求不带 `ruleId`：只告警、只找人、只记录认领、屏蔽、升级。这三种处理没有改。
+
+## 还没做
+
+没有接真实 Alertmanager，也没有告警聚合、去重引擎、自愈策略编排、并行或 DAG。`cmd/webhook` 仍是入口占位。对接真实告警系统时，把指纹、节点、对象、规则编号和摘要送到现有 webhook 即可，不要另做一条直接调副作用接口的路。
