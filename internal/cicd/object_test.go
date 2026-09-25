@@ -71,4 +71,21 @@ func TestEnsureKeepsOrders(t *testing.T) {
 	if attr.Image != "order-api" || attr.Strategy != "manual" || attr.Executor != "" {
 		t.Fatalf("策略 = %+v", attr)
 	}
+	if err := EnsureAll(db); err != nil {
+		t.Fatal(err)
+	}
+	var again model.DeployItem
+	if err := db.First(&again, item.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if again.ObjectID != got.ObjectID || again.TreeNodeID != node.ID {
+		t.Fatalf("重复补对象 = %+v", again)
+	}
+	var n int64
+	if err := db.Model(&model.CMDBObject{}).Where("name = ?", "order-api").Count(&n).Error; err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("对象条数 = %d", n)
+	}
 }
