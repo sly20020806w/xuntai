@@ -30,7 +30,7 @@ func Seed(db *gorm.DB) (bool, error) {
 		return false, err
 	}
 	if count > 0 {
-		return false, nil
+		return false, ensureReleaseTemplates(db)
 	}
 	err := db.Transaction(func(tx *gorm.DB) error {
 		tpl := model.TicketTemplate{
@@ -73,7 +73,31 @@ func Seed(db *gorm.DB) (bool, error) {
 		}
 		return nil
 	})
-	return err == nil, err
+	if err != nil {
+		return false, err
+	}
+	return true, ensureReleaseTemplates(db)
+}
+
+func ensureReleaseTemplates(db *gorm.DB) error {
+	for _, name := range []string{"生产发布", "生产回滚"} {
+		var count int64
+		if err := db.Model(&model.TicketTemplate{}).Where("name = ?", name).Count(&count).Error; err != nil {
+			return err
+		}
+		if count > 0 {
+			continue
+		}
+		row := model.TicketTemplate{
+			Name:     name,
+			FormJSON: `{"fields":["发布项","镜像标签","集群"]}`,
+			FlowJSON: `{"steps":["approve","run"]}`,
+		}
+		if err := db.Create(&row).Error; err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func stepOf(status string) string {

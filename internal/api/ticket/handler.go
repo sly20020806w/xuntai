@@ -5,11 +5,13 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 
 	"xuntai/internal/model"
+	"xuntai/internal/playbook"
 	"xuntai/internal/scope"
 	"xuntai/internal/tree"
 )
@@ -209,18 +211,63 @@ func (h handler) move(c *gin.Context, from, to, step string, blockApplicant bool
 		c.JSON(http.StatusBadRequest, gin.H{"error": "还没审批通过，不能执行"})
 		return
 	}
-	res := h.deps.DB.Model(&model.TicketInstance{}).
-		Where("id = ? AND status = ?", row.ID, from).
-		Updates(map[string]any{"status": to, "current_node": step})
-	if res.Error != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "工单没有改成"})
-		return
-	}
-	if res.RowsAffected == 0 {
+	var runID uint
+	err = h.deps.DB.Transaction(func(tx *gorm.DB) error {
+		updates := map[string]any{"status": to, "current_node": step}
+		if to == "pending_action" {
+			now := time.Now().UTC()
+			updates["approved_by"] = c.GetUint("uid")
+			updates["approved_at"] = now
+			row.ApprovedBy = c.GetUint("uid")
+			row.ApprovedAt = &now
+		}
+		res := tx.Model(&model.TicketInstance{}).Where("id = ? AND status = ?", row.ID, from).Updates(updates)
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			return errStale
+		}
+		if to != "pending_action" {
+			return nil
+		}
+		row.Status = to
+		id, err := playbook.Drive(tx, row, c.GetUint("uid"))
+		if err != nil {
+			return err
+		}
+		runID = id
+		if id == 0 {
+			return nil
+		}
+		return tx.Model(&model.TicketInstance{}).Where("id = ?", row.ID).Update("run_id", id).Error
+	})
+	if errors.Is(err, errStale) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "这张单不能再改"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"id": row.ID, "status": to})
+	if err != nil {
+		writeDriveErr(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"id": row.ID, "status": to, "runId": runID})
+}
+
+var errStale = errors.New("stale")
+
+func writeDriveErr(c *gin.Context, err error) {
+	switch {
+	case errors.Is(err, playbook.ErrConflict):
+		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+	case errors.Is(err, playbook.ErrForbidden):
+		c.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
+	default:
+		if strings.Contains(err.Error(), "工单没有改成") {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "工单没有改成"})
+			return
+		}
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+	}
 }
 
 func (h handler) ready(c *gin.Context) bool {

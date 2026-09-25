@@ -6,23 +6,27 @@ import (
 	"xuntai/internal/access"
 	apibase "xuntai/internal/api/base"
 	"xuntai/internal/api/cicd"
+	"xuntai/internal/api/cmdb"
 	"xuntai/internal/api/db"
 	"xuntai/internal/api/k8s"
 	"xuntai/internal/api/monitor"
+	"xuntai/internal/api/playbook"
 	"xuntai/internal/api/task"
 	"xuntai/internal/api/ticket"
 	"xuntai/internal/api/tree"
 )
 
 type Deps struct {
-	Base    apibase.Deps
-	Tree    tree.Deps
-	Ticket  ticket.Deps
-	Task    task.Deps
-	Monitor monitor.Deps
-	K8s     k8s.Deps
-	Cicd    cicd.Deps
-	Db      db.Deps
+	Base     apibase.Deps
+	Tree     tree.Deps
+	Ticket   ticket.Deps
+	Task     task.Deps
+	Monitor  monitor.Deps
+	K8s      k8s.Deps
+	Cicd     cicd.Deps
+	Db       db.Deps
+	Cmdb     cmdb.Deps
+	Playbook playbook.Deps
 }
 
 func New(deps Deps) *gin.Engine {
@@ -31,7 +35,7 @@ func New(deps Deps) *gin.Engine {
 	r.Use(func(c *gin.Context) {
 		c.Header("Access-Control-Allow-Origin", "http://127.0.0.1:5173")
 		c.Header("Access-Control-Allow-Headers", "Authorization, Content-Type")
-		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS")
+		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		if c.Request.Method == "OPTIONS" {
 			c.AbortWithStatus(204)
 			return
@@ -50,6 +54,8 @@ func New(deps Deps) *gin.Engine {
 	k8s.Register(r.Group("/api/k8s"), deps.K8s)
 	cicd.Register(r.Group("/api/cicd"), deps.Cicd)
 	db.Register(r.Group("/api/db"), deps.Db)
+	cmdb.Register(r.Group("/api/cmdb"), deps.Cmdb)
+	playbook.Register(r.Group("/api/playbook"), deps.Playbook)
 	return r
 }
 

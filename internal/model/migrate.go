@@ -34,6 +34,13 @@ func Models() []any {
 		&Instance{},
 		&Backup{},
 		&Restore{},
+		&CMDBModel{},
+		&CMDBObject{},
+		&ObjectNode{},
+		&Playbook{},
+		&PlaybookStep{},
+		&Run{},
+		&RunStep{},
 	}
 }
 

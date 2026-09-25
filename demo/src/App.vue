@@ -31,6 +31,8 @@ const session = ref(null);
 const token = ref("");
 const liveNodes = ref([]);
 const liveMachines = ref([]);
+const liveObjects = ref([]);
+const liveRuns = ref([]);
 const treeError = ref("");
 const machineName = ref("");
 const machineIP = ref("");
@@ -100,6 +102,8 @@ const sideNodes = computed(() => {
   }));
 });
 const shownMachines = computed(() => (session.value ? liveMachines.value.filter((row) => inScope(row)) : machineRows.value));
+const shownObjects = computed(() => liveObjects.value.filter((row) => inScope(row)));
+const shownRuns = computed(() => liveRuns.value.filter((row) => inScope(row)));
 const shownTickets = computed(() => (session.value ? liveTickets.value.filter((row) => inScope(row)) : ticketView.value));
 const shownTasks = computed(() => (session.value ? liveJobs.value.filter((row) => inScope(row)) : taskRows.value));
 const shownScrapeJobs = computed(() => (session.value ? liveScrapeJobs.value.filter((row) => inScope(row)) : jobRows.value));
@@ -205,9 +209,42 @@ async function login() {
     await loadK8s();
     await loadReleases();
     await loadDb();
+    await loadObjects();
+    await loadRuns();
   } catch {
     loginError.value = "登录服务没有启动";
   }
+}
+
+async function loadObjects() {
+  if (!token.value) return;
+  try {
+    const res = await fetch("/api/cmdb/objects", { headers: { Authorization: `Bearer ${token.value}` } });
+    if (res.ok) liveObjects.value = await res.json();
+  } catch {
+    liveObjects.value = [];
+  }
+}
+
+async function loadRuns() {
+  if (!token.value) return;
+  try {
+    const res = await fetch("/api/playbook/runs", { headers: { Authorization: `Bearer ${token.value}` } });
+    if (res.ok) liveRuns.value = await res.json();
+  } catch {
+    liveRuns.value = [];
+  }
+}
+
+async function continueRun(row) {
+  const step = (row.steps || []).find((item) => item.status === "waiting");
+  if (!step) return;
+  await fetch(`/api/playbook/runs/${row.id}/continue`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token.value}` },
+    body: JSON.stringify({ stepId: step.id, version: row.version, continueInput: {} }),
+  });
+  await loadRuns();
 }
 
 async function loadTree() {
@@ -964,6 +1001,19 @@ if (keptToken) {
               </tr>
             </tbody>
           </table>
+          <h2 v-if="session" class="panel-title">对象</h2>
+          <table v-if="session">
+            <thead>
+              <tr><th>对象</th><th>模型</th><th>节点</th></tr>
+            </thead>
+            <tbody>
+              <tr v-for="row in shownObjects" :key="row.id">
+                <td>{{ row.name }}</td>
+                <td>{{ row.modelName }}</td>
+                <td>{{ row.nodeName }}</td>
+              </tr>
+            </tbody>
+          </table>
         </template>
 
         <template v-else-if="currentId === 'ticket'">
@@ -1248,7 +1298,7 @@ if (keptToken) {
             <button type="submit">发布</button>
             <span v-if="releaseError">{{ releaseError }}</span>
           </form>
-          <p v-if="session" class="note">开发环境提交后直接完成。生产停在阶段上等人确认，通过后把标签写进实例。回到旧版本是再发那个标签。</p>
+          <p v-if="session" class="note">开发环境提交后直接完成。生产停在阶段上等人确认，通过后把标签写进实例。回到旧版本是再发那个标签。生产发布工单通过后会另开一条串行剧本，工单本身不再去调发布接口。</p>
           <p v-else class="note">生产单停在阶段之间等人确认。开发环境不进这个表。</p>
           <template v-if="session">
             <article v-for="row in shownReleases" :key="row.id" style="margin-bottom: 18px">
@@ -1261,6 +1311,20 @@ if (keptToken) {
                 <button @click="confirmRelease(row.id)">确认当前阶段</button>
               </div>
             </article>
+            <h2 class="panel-title">剧本执行</h2>
+            <table>
+              <thead>
+                <tr><th>编号</th><th>剧本</th><th>状态</th><th></th></tr>
+              </thead>
+              <tbody>
+                <tr v-for="row in shownRuns" :key="row.id">
+                  <td>{{ row.id }}</td>
+                  <td>{{ row.playbook }}</td>
+                  <td>{{ row.status }}</td>
+                  <td><button v-if="row.status === 'paused'" type="button" @click="continueRun(row)">继续</button></td>
+                </tr>
+              </tbody>
+            </table>
           </template>
           <template v-else>
             <article v-for="row in releaseRows" :key="row.id" style="margin-bottom: 18px">

@@ -6,20 +6,24 @@ import (
 	"xuntai/internal/access"
 	apibase "xuntai/internal/api/base"
 	apicicd "xuntai/internal/api/cicd"
+	apicmdb "xuntai/internal/api/cmdb"
 	apidb "xuntai/internal/api/db"
 	apik8s "xuntai/internal/api/k8s"
 	apimonitor "xuntai/internal/api/monitor"
+	apiplay "xuntai/internal/api/playbook"
 	apitask "xuntai/internal/api/task"
 	apiticket "xuntai/internal/api/ticket"
 	apitree "xuntai/internal/api/tree"
 	"xuntai/internal/base"
 	"xuntai/internal/cicd"
+	"xuntai/internal/cmdb"
 	"xuntai/internal/config"
 	dbmod "xuntai/internal/db"
 	"xuntai/internal/httpserver"
 	"xuntai/internal/k8s"
 	"xuntai/internal/model"
 	"xuntai/internal/monitor"
+	"xuntai/internal/playbook"
 	"xuntai/internal/scope"
 	"xuntai/internal/store"
 	"xuntai/internal/task"
@@ -97,6 +101,16 @@ func main() {
 	if dbReady {
 		log.Printf("已补上数据库示例")
 	}
+	if _, err := cmdb.Seed(db); err != nil {
+		log.Fatal(err)
+	}
+	playReady, err := playbook.Seed(db)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if playReady {
+		log.Printf("已补上三套剧本")
+	}
 	if err := base.ApplyPassword(db, cfg.AdminPassword); err != nil {
 		log.Fatal(err)
 	}
@@ -105,14 +119,16 @@ func main() {
 		log.Fatal(err)
 	}
 	if err := httpserver.Run(cfg.HTTPAddr, httpserver.Deps{
-		Base:    apibase.Deps{DB: db, Secret: cfg.JWTSecret, Gate: gate},
-		Tree:    apitree.Deps{DB: db},
-		Ticket:  apiticket.Deps{DB: db},
-		Task:    apitask.Deps{DB: db},
-		Monitor: apimonitor.Deps{DB: db},
-		K8s:     apik8s.Deps{DB: db},
-		Cicd:    apicicd.Deps{DB: db},
-		Db:      apidb.Deps{DB: db},
+		Base:     apibase.Deps{DB: db, Secret: cfg.JWTSecret, Gate: gate},
+		Tree:     apitree.Deps{DB: db},
+		Ticket:   apiticket.Deps{DB: db},
+		Task:     apitask.Deps{DB: db},
+		Monitor:  apimonitor.Deps{DB: db},
+		K8s:      apik8s.Deps{DB: db},
+		Cicd:     apicicd.Deps{DB: db},
+		Db:       apidb.Deps{DB: db},
+		Cmdb:     apicmdb.Deps{DB: db},
+		Playbook: apiplay.Deps{DB: db},
 	}); err != nil {
 		log.Fatal(err)
 	}

@@ -1,0 +1,31 @@
+# 剧本、工单、对象
+
+## 剧本和工单、任务
+
+工单仍只有四种状态：`pending_approve`、`reject`、`pending_action`、`finished`。模板没有状态。审批通过后，只有「生产发布」和「生产回滚」会创建一条执行实例 Run，幂等键是工单号。工单服务只调用剧本入口，不调用任务、集群或发布接口。
+
+剧本是串行步骤，不是流程引擎。只有 `published` 能启动。执行靠 `current_step_index` 往下走。`paused` 只来自 `wait_manual` 或还没审批的 `ticket_gate`。恢复要带上当前的 `version`。
+
+任务步骤调用任务中心里的同一条下发。发布步骤按发布项和 `clusters` 的第一个集群，把镜像写到应用实例。不做多集群循环。
+
+同一个剧本加同一个幂等键，同时只能有一条未结束的 Run，再触发返回 409。成功、失败、取消之后，同一个键可以再开一条。重试会复制输入新建 Run，并换成 `原键:序号`。还在跑或暂停的原 Run 改成取消，审计里写「由重试取代」。已经失败的原 Run 保持失败，只补审计。
+
+## 对象和主机
+
+主机仍在 `tree_machines`，只有叶子能挂机器，写权限仍沿父节点找运维负责人。
+
+通用对象另三张表：`model`、`object`、`object_node`。所有对象进同一张 `object`，不按模型拆表。对象只存配置，不存运行状态。
+
+## 预置剧本
+
+| 编码 | 步骤 |
+|---|---|
+| inspect.host.baseline | task_run `run_inspect`，不需要工单 |
+| release.prod.single | ticket_gate `gate`，k8s_apply `deploy`，wait_manual `confirm`。入参里有 `verify_url` 才追加 http_call |
+| release.prod.rollback | 与单次发布相同，镜像用 `previous_tag` |
+
+参数只有四种写法：`{{ run.input.X }}`、`{{ steps.步骤.output.Y }}`、`{{ run.context.Z }}`、字面量。对不上就让这一步失败。`run.context` 只在人工确认并入，或重试时原样带走。
+
+## 这次不做
+
+会签、并行网关、通用 BPM、服务模板、集群模板、字段模板、网络采集、Pod 或 Deployment 资产、多集群循环、数据库平台改动、Prometheus 改动。
