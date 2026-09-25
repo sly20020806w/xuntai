@@ -96,6 +96,7 @@ func TestCMDBObjectsKeepHostBinding(t *testing.T) {
 }
 
 func TestSerialPlaybookTicketAndIdempotency(t *testing.T) {
+	t.Setenv("XUNTAI_AGENT_MOCK", "")
 	engine, db := playEngine(t)
 	lin := loginName(t, engine, "林夏", "secret")
 	xu := loginName(t, engine, "许衡", "secret")
@@ -473,6 +474,79 @@ func TestProductionImageOnlyFromPlaybook(t *testing.T) {
 	}
 	if ticketRow.Status != "finished" {
 		t.Fatalf("继续后工单 = %s", ticketRow.Status)
+	}
+}
+
+func TestInspectAgentMock(t *testing.T) {
+	t.Setenv("XUNTAI_AGENT_MOCK", "")
+	engine, db := playEngine(t)
+	lin := loginName(t, engine, "林夏", "secret")
+	nodes := decodeNodes(t, getAuth(engine, "/api/tree/nodes", lin))
+	order := mustNode(t, nodes, "订单")
+	before := imageOf(t, engine, lin, "order-api", "生产")
+	machines := decodeJSON[[]struct {
+		ID uint   `json:"id"`
+		IP string `json:"ip"`
+	}](t, getAuth(engine, fmt.Sprintf("/api/tree/machines?nodeId=%d", order.ID), lin))
+	hostIDs := make([]uint, 0, len(machines))
+	for _, machine := range machines {
+		hostIDs = append(hostIDs, machine.ID)
+	}
+	hostJSON, _ := json.Marshal(hostIDs)
+	body := func(key, extra string) string {
+		return fmt.Sprintf(`{"playbook":"inspect.host.baseline","idempotencyKey":"%s","input":{"tree_node_id":%d,"host_ids":%s%s}}`, key, order.ID, hostJSON, extra)
+	}
+	stuck := postJSON(engine, "/api/playbook/runs", body("inspect-mock-off", `,"agent_mock":"failed"`), lin)
+	if stuck.Code != http.StatusOK {
+		t.Fatalf("关闭模拟 = %d %s", stuck.Code, stuck.Body.String())
+	}
+	waiting := decodeRun(t, stuck)
+	if waiting.Status != "running" {
+		t.Fatalf("没开模拟仍结束 = %s", waiting.Status)
+	}
+	taskID := uint(0)
+	for _, step := range waiting.Steps {
+		if step.Key == "run_inspect" {
+			taskID = uint(step.Output["task_id"].(float64))
+		}
+	}
+	var issued int64
+	if err := db.Model(&model.JobResult{}).Where("job_id = ? AND status = ?", taskID, "issued").Count(&issued).Error; err != nil {
+		t.Fatal(err)
+	}
+	if issued == 0 {
+		t.Fatal("没有停在已下发")
+	}
+
+	t.Setenv("XUNTAI_AGENT_MOCK", "1")
+	if !playbook.AgentMock() {
+		t.Fatal("模拟开关没有打开")
+	}
+	synced := postJSON(engine, fmt.Sprintf("/api/playbook/runs/%d/sync", waiting.ID), "", lin)
+	if synced.Code != http.StatusOK {
+		t.Fatalf("同步模拟 = %d %s", synced.Code, synced.Body.String())
+	}
+	if decodeRun(t, synced).Status != "failed" {
+		t.Fatal("失败回写没有让执行失败")
+	}
+	var failed int64
+	if err := db.Model(&model.JobResult{}).Where("job_id = ? AND status = ?", taskID, "failed").Count(&failed).Error; err != nil {
+		t.Fatal(err)
+	}
+	if failed != int64(len(machines)) {
+		t.Fatalf("失败结果 = %d", failed)
+	}
+
+	passed := postJSON(engine, "/api/playbook/runs", body("inspect-mock-ok", ""), lin)
+	if passed.Code != http.StatusOK {
+		t.Fatalf("成功模拟 = %d %s", passed.Code, passed.Body.String())
+	}
+	okRun := decodeRun(t, passed)
+	if okRun.Status != "success" {
+		t.Fatalf("成功模拟状态 = %s %+v", okRun.Status, okRun.Steps)
+	}
+	if imageOf(t, engine, lin, "order-api", "生产") != before {
+		t.Fatal("巡检模拟改了生产镜像")
 	}
 }
 

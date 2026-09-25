@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -14,6 +15,16 @@ import (
 	"xuntai/internal/task"
 	"xuntai/internal/tree"
 )
+
+// AgentMock 只在测试或本地打开。生产不设置时，巡检一直等到真实代理回写。
+func AgentMock() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("XUNTAI_AGENT_MOCK"))) {
+	case "1", "true", "on", "yes":
+		return true
+	default:
+		return false
+	}
+}
 
 func gateTicket(db *gorm.DB, ticketID uint) (map[string]any, string, error) {
 	var ticket model.TicketInstance
@@ -86,6 +97,11 @@ func runTask(db *gorm.DB, userID uint, mapped map[string]any, run model.Run, ste
 }
 
 func pollTask(db *gorm.DB, taskID uint, hostIDs []uint, run model.Run) (map[string]any, string, error) {
+	if AgentMock() {
+		if err := writeMockResults(db, taskID, run); err != nil {
+			return nil, "failed", err
+		}
+	}
 	var results []model.JobResult
 	if err := db.Where("job_id = ?", taskID).Find(&results).Error; err != nil {
 		return nil, "failed", err
@@ -132,6 +148,30 @@ func pollTask(db *gorm.DB, taskID uint, hostIDs []uint, run model.Run) (map[stri
 		return output, "failed", fmt.Errorf("有主机没有通过巡检")
 	}
 	return output, "success", nil
+}
+
+func writeMockResults(db *gorm.DB, taskID uint, run model.Run) error {
+	status := "success"
+	output := "模拟巡检通过"
+	if asString(decodeObject(run.InputJSON)["agent_mock"]) == "failed" {
+		status = "failed"
+		output = "模拟巡检未通过"
+	}
+	for range 32 {
+		var rows []model.JobResult
+		if err := db.Where("job_id = ? AND status = ?", taskID, "issued").Find(&rows).Error; err != nil {
+			return err
+		}
+		if len(rows) == 0 {
+			return nil
+		}
+		for _, row := range rows {
+			if err := task.Report(db, taskID, row.HostIP, status, output); err != nil {
+				return err
+			}
+		}
+	}
+	return fmt.Errorf("模拟回写没有收完")
 }
 
 func applyRelease(db *gorm.DB, userID uint, mapped map[string]any) (map[string]any, string, error) {

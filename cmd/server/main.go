@@ -111,6 +111,9 @@ func main() {
 	if playReady {
 		log.Printf("已补上三套剧本")
 	}
+	if playbook.AgentMock() {
+		log.Printf("巡检结果由本地模拟回写，生产环境不要打开")
+	}
 	if err := base.ApplyPassword(db, cfg.AdminPassword); err != nil {
 		log.Fatal(err)
 	}
