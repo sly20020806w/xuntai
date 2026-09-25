@@ -27,6 +27,8 @@ func Register(r *gin.RouterGroup, deps Deps) {
 	})
 	r.GET("/items", h.listItems)
 	r.POST("/items", access.ResourceCheck(deps.DB, "POST", "/api/cicd/items", access.VerbAdmin, access.ResReleaseItem), h.createItem)
+	r.GET("/items/:id", h.getItem)
+	r.PUT("/items/:id", access.ResourceCheck(deps.DB, "PUT", "/api/cicd/items/:id", access.VerbAdmin, access.ResReleaseItem), h.updateItem)
 	r.GET("/orders", h.listOrders)
 	r.POST("/orders", h.createOrder)
 	r.POST("/orders/:id/confirm", access.ResourceCheck(deps.DB, "POST", "/api/cicd/orders/:id/confirm", access.VerbOperate, access.ResReleaseItem), h.confirm)
@@ -51,14 +53,38 @@ func (h handler) listItems(c *gin.Context) {
 		return
 	}
 	names := h.nodeNames()
+	nodeFilter, objectFilter, ok := h.itemQuery(c)
+	if !ok {
+		return
+	}
 	out := make([]gin.H, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, gin.H{
-			"id": row.ID, "name": row.Name, "nodeId": row.TreeNodeID,
-			"nodeName": names[row.TreeNodeID], "repo": row.Repo, "imageName": row.ImageName,
-		})
+		if objectFilter != 0 && row.ObjectID != objectFilter {
+			continue
+		}
+		if nodeFilter != 0 && !h.nodeCovers(nodeFilter, row.TreeNodeID) {
+			continue
+		}
+		out = append(out, h.itemJSON(row, names))
 	}
 	c.JSON(http.StatusOK, out)
+}
+
+func (h handler) getItem(c *gin.Context) {
+	row, ok := h.findItem(c)
+	if !ok {
+		return
+	}
+	ids, all, err := scope.IDs(h.deps.DB, c.GetUint("uid"))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "权限核对失败"})
+		return
+	}
+	if !scope.Allows(ids, all, row.TreeNodeID) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "没有这个发布项"})
+		return
+	}
+	c.JSON(http.StatusOK, h.itemDetail(row))
 }
 
 func (h handler) createItem(c *gin.Context) {
@@ -66,10 +92,16 @@ func (h handler) createItem(c *gin.Context) {
 		return
 	}
 	var body struct {
-		Name       string `json:"name"`
-		TreeNodeID uint   `json:"treeNodeId"`
-		Repo       string `json:"repo"`
-		ImageName  string `json:"imageName"`
+		Name       string   `json:"name"`
+		TreeNodeID uint     `json:"treeNodeId"`
+		Repo       string   `json:"repo"`
+		ImageName  string   `json:"imageName"`
+		Stages     []string `json:"stages"`
+		Clusters   []uint   `json:"clusters"`
+		Batches    []string `json:"batches"`
+		Strategy   string   `json:"strategy"`
+		VerifyURL  string   `json:"verifyUrl"`
+		Executor   string   `json:"executor"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil || strings.TrimSpace(body.Name) == "" || body.TreeNodeID == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "需要发布项名和节点"})
@@ -91,6 +123,14 @@ func (h handler) createItem(c *gin.Context) {
 	if image == "" {
 		image = strings.TrimSpace(body.Name)
 	}
+	attr := cicdcore.Attr{
+		Stages: body.Stages, Clusters: body.Clusters, Batches: body.Batches,
+		Strategy: body.Strategy, VerifyURL: body.VerifyURL, Executor: body.Executor,
+	}
+	if err := cicdcore.Validate(attr); err != nil {
+		h.writeErr(c, err)
+		return
+	}
 	row := model.DeployItem{
 		Name: strings.TrimSpace(body.Name), TreeNodeID: node.ID,
 		Repo: strings.TrimSpace(body.Repo), ImageName: image,
@@ -99,7 +139,58 @@ func (h handler) createItem(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "发布项没有建成"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"id": row.ID, "name": row.Name})
+	if err := cicdcore.Save(h.deps.DB, &row, attr); err != nil {
+		h.writeErr(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"id": row.ID, "name": row.Name, "objectId": row.ObjectID})
+}
+
+func (h handler) updateItem(c *gin.Context) {
+	row, ok := h.findItem(c)
+	if !ok || !access.Permit(c, h.deps.DB, row.TreeNodeID) {
+		return
+	}
+	var body struct {
+		Stages    *[]string `json:"stages"`
+		Clusters  *[]uint   `json:"clusters"`
+		Batches   *[]string `json:"batches"`
+		Strategy  *string   `json:"strategy"`
+		VerifyURL *string   `json:"verifyUrl"`
+		Executor  *string   `json:"executor"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "发布策略没有读出来"})
+		return
+	}
+	attr, err := cicdcore.Load(h.deps.DB, row.ID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "发布策略没有读出来"})
+		return
+	}
+	if body.Stages != nil {
+		attr.Stages = *body.Stages
+	}
+	if body.Clusters != nil {
+		attr.Clusters = *body.Clusters
+	}
+	if body.Batches != nil {
+		attr.Batches = *body.Batches
+	}
+	if body.Strategy != nil {
+		attr.Strategy = *body.Strategy
+	}
+	if body.VerifyURL != nil {
+		attr.VerifyURL = *body.VerifyURL
+	}
+	if body.Executor != nil {
+		attr.Executor = *body.Executor
+	}
+	if err := cicdcore.Save(h.deps.DB, &row, attr); err != nil {
+		h.writeErr(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, h.itemDetail(row))
 }
 
 func (h handler) listOrders(c *gin.Context) {
@@ -204,6 +295,80 @@ func (h handler) confirm(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"id": order.ID})
 }
 
+func (h handler) findItem(c *gin.Context) (model.DeployItem, bool) {
+	var row model.DeployItem
+	if !h.ready(c) {
+		return row, false
+	}
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil || id <= 0 || h.deps.DB.First(&row, id).Error != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "没有这个发布项"})
+		return row, false
+	}
+	return row, true
+}
+
+func (h handler) itemQuery(c *gin.Context) (uint, uint, bool) {
+	nodeID, ok := queryID(c, "nodeId")
+	if !ok {
+		return 0, 0, false
+	}
+	objectID, ok := queryID(c, "objectId")
+	if !ok {
+		return 0, 0, false
+	}
+	return nodeID, objectID, true
+}
+
+func queryID(c *gin.Context, key string) (uint, bool) {
+	raw := c.Query(key)
+	if raw == "" {
+		return 0, true
+	}
+	id, err := strconv.Atoi(raw)
+	if err != nil || id <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "编号不对"})
+		return 0, false
+	}
+	return uint(id), true
+}
+
+func (h handler) nodeCovers(root, target uint) bool {
+	if root == target {
+		return true
+	}
+	ids, err := tree.SubtreeIDs(h.deps.DB, root)
+	if err != nil {
+		return false
+	}
+	for _, id := range ids {
+		if id == target {
+			return true
+		}
+	}
+	return false
+}
+
+func (h handler) itemJSON(row model.DeployItem, names map[uint]string) gin.H {
+	return gin.H{
+		"id": row.ID, "name": row.Name, "nodeId": row.TreeNodeID,
+		"nodeName": names[row.TreeNodeID], "repo": row.Repo, "imageName": row.ImageName,
+		"objectId": row.ObjectID, "objectName": row.Name,
+	}
+}
+
+func (h handler) itemDetail(row model.DeployItem) gin.H {
+	attr, _ := cicdcore.Load(h.deps.DB, row.ID)
+	body := h.itemJSON(row, h.nodeNames())
+	body["stages"] = attr.Stages
+	body["clusters"] = attr.Clusters
+	body["batches"] = attr.Batches
+	body["strategy"] = attr.Strategy
+	body["verifyUrl"] = attr.VerifyURL
+	body["executor"] = attr.Executor
+	return body
+}
+
 func (h handler) requireOps(c *gin.Context, nodeID uint) bool {
 	ok, err := tree.CanWrite(h.deps.DB, c.GetUint("uid"), nodeID)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -257,6 +422,10 @@ func (h handler) writeErr(c *gin.Context, err error) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "环境只能是开发或生产"})
 	case errors.Is(err, cicdcore.ErrNotFound):
 		c.JSON(http.StatusNotFound, gin.H{"error": "没有找到发布需要的记录"})
+	case errors.Is(err, cicdcore.ErrExecutor):
+		c.JSON(http.StatusBadRequest, gin.H{"error": "执行器还没有接上"})
+	case errors.Is(err, cicdcore.ErrBatch):
+		c.JSON(http.StatusBadRequest, gin.H{"error": "批次名称不对"})
 	default:
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "发布没有写成"})
 	}

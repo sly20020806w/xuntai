@@ -9,6 +9,7 @@ import (
 
 	"gorm.io/gorm"
 
+	"xuntai/internal/cicd"
 	"xuntai/internal/model"
 )
 
@@ -78,12 +79,13 @@ func Start(db *gorm.DB, code string, userID uint, idemKey string, input map[stri
 				Status: "pending", OnError: item.OnError, InputJSON: "{}", OutputJSON: "{}",
 			})
 		}
-		if verifyURL(input) != "" && (code == "release.prod.single" || code == "release.prod.rollback") {
-			steps = append(steps, model.RunStep{
-				RunID: run.ID, StepKey: "verify", Seq: len(steps) + 1, Kind: "http_call",
-				Status: "pending", OnError: "stop",
-				InputJSON: "{}", OutputJSON: "{}",
-			})
+		if code == "release.prod.single" || code == "release.prod.rollback" {
+			itemID, _ := asUint(input["release_item_id"])
+			batches, verify, err := cicd.Plan(tx, itemID)
+			if err != nil {
+				return err
+			}
+			steps = materialize(steps, batches, verify)
 		}
 		return tx.Create(&steps).Error
 	})
@@ -163,9 +165,6 @@ func dispatch(db *gorm.DB, run *model.Run, step *model.RunStep, depth int) error
 		err := db.Where("playbook_id = ? AND step_key = ?", run.PlaybookID, step.StepKey).First(&template).Error
 		if err == nil {
 			mapping = template.InputMapping
-		}
-		if step.Kind == "http_call" && step.StepKey == "verify" {
-			mapping = `{"url":"{{ run.input.verify_url }}"}`
 		}
 	}
 	mapped, err := applyMapping(mapping, input, context, outputs)
@@ -385,8 +384,38 @@ func requireInput(code string, input map[string]any) error {
 	return nil
 }
 
-func verifyURL(input map[string]any) string {
-	return asString(input["verify_url"])
+func materialize(steps []model.RunStep, batches []string, verify string) []model.RunStep {
+	out := make([]model.RunStep, 0, len(steps)+len(batches)+1)
+	for _, step := range steps {
+		if step.Kind == "wait_manual" && len(batches) >= 2 {
+			for _, name := range batches {
+				out = append(out, model.RunStep{
+					RunID: step.RunID, StepKey: name, Kind: "wait_manual",
+					Status: "pending", OnError: "stop", InputJSON: "{}", OutputJSON: "{}",
+				})
+			}
+			continue
+		}
+		out = append(out, step)
+	}
+	if verify != "" {
+		raw, err := json.Marshal(map[string]string{"url": verify})
+		if err != nil {
+			raw = []byte("{}")
+		}
+		runID := uint(0)
+		if len(steps) > 0 {
+			runID = steps[0].RunID
+		}
+		out = append(out, model.RunStep{
+			RunID: runID, StepKey: "verify", Kind: "http_call",
+			Status: "pending", OnError: "stop", InputJSON: string(raw), OutputJSON: "{}",
+		})
+	}
+	for i := range out {
+		out[i].Seq = i + 1
+	}
+	return out
 }
 
 func bump(db *gorm.DB, run *model.Run, total, depth int) error {

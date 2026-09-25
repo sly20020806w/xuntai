@@ -207,7 +207,10 @@ func TestSerialPlaybookTicketAndIdempotency(t *testing.T) {
 		_, _ = w.Write([]byte("ok"))
 	}))
 	defer verify.Close()
-	payload := fmt.Sprintf(`{"release_item_id":%d,"image_tag":"1.9.0","clusters":[%d],"verify_url":"%s"}`, itemID, clusterID, verify.URL)
+	if rec := putJSON(engine, fmt.Sprintf("/api/cicd/items/%d", itemID), fmt.Sprintf(`{"verifyUrl":%q}`, verify.URL), lin); rec.Code != http.StatusOK {
+		t.Fatalf("写入校验地址 = %d %s", rec.Code, rec.Body.String())
+	}
+	payload := fmt.Sprintf(`{"release_item_id":%d,"image_tag":"1.9.0","clusters":[%d]}`, itemID, clusterID)
 	created := postJSON(engine, "/api/ticket/instances", fmt.Sprintf(`{"templateId":%d,"treeNodeId":%d,"title":"订单生产发布","payload":%q}`, releaseTpl, order.ID, payload), chen)
 	if created.Code != http.StatusOK {
 		t.Fatalf("提单 = %d %s", created.Code, created.Body.String())
@@ -248,6 +251,15 @@ func TestSerialPlaybookTicketAndIdempotency(t *testing.T) {
 	finalRun := decodeRun(t, continued)
 	if finalRun.Status != "success" {
 		t.Fatalf("发布结束 = %s %+v", finalRun.Status, finalRun.Steps)
+	}
+	verified := false
+	for _, step := range finalRun.Steps {
+		if step.Key == "verify" && step.Status == "success" {
+			verified = true
+		}
+	}
+	if !verified {
+		t.Fatalf("校验没有从发布项读到 %+v", finalRun.Steps)
 	}
 	var ticketRow model.TicketInstance
 	if err := db.First(&ticketRow, ticketID).Error; err != nil {
@@ -548,6 +560,141 @@ func TestInspectTaskMock(t *testing.T) {
 	}
 	if imageOf(t, engine, lin, "order-api", "生产") != before {
 		t.Fatal("巡检模拟改了生产镜像")
+	}
+}
+
+func TestReleaseBatchWaits(t *testing.T) {
+	engine, _ := playEngine(t)
+	lin := loginName(t, engine, "林夏", "secret")
+	chen := loginName(t, engine, "陈舟", "secret")
+	nodes := decodeNodes(t, getAuth(engine, "/api/tree/nodes", lin))
+	order := mustNode(t, nodes, "订单")
+	items := decodeJSON[[]namedID](t, getAuth(engine, "/api/cicd/items", lin))
+	var itemID uint
+	for _, item := range items {
+		if item.Name == "order-api" {
+			itemID = item.ID
+		}
+	}
+	clusters := decodeJSON[[]struct {
+		ID  uint   `json:"id"`
+		Env string `json:"env"`
+	}](t, getAuth(engine, "/api/k8s/clusters", lin))
+	var clusterID uint
+	for _, cluster := range clusters {
+		if cluster.Env == "生产" {
+			clusterID = cluster.ID
+		}
+	}
+	templates := decodeJSON[[]namedID](t, getAuth(engine, "/api/ticket/templates", chen))
+	var releaseTpl, rollbackTpl uint
+	for _, tpl := range templates {
+		if tpl.Name == "生产发布" {
+			releaseTpl = tpl.ID
+		}
+		if tpl.Name == "生产回滚" {
+			rollbackTpl = tpl.ID
+		}
+	}
+	if rec := putJSON(engine, fmt.Sprintf("/api/cicd/items/%d", itemID), `{"batches":["batch1","batch2"],"strategy":"canary","verifyUrl":""}`, lin); rec.Code != http.StatusOK {
+		t.Fatalf("写入批次 = %d %s", rec.Code, rec.Body.String())
+	}
+	payload := fmt.Sprintf(`{"release_item_id":%d,"image_tag":"1.9.4","clusters":[%d],"verify_url":"http://127.0.0.1:1","batches":["skip"]}`, itemID, clusterID)
+	created := postJSON(engine, "/api/ticket/instances", fmt.Sprintf(`{"templateId":%d,"treeNodeId":%d,"title":"分批发布","payload":%q}`, releaseTpl, order.ID, payload), chen)
+	if created.Code != http.StatusOK {
+		t.Fatalf("提单 = %d %s", created.Code, created.Body.String())
+	}
+	ticketID := decodeJSON[struct {
+		ID uint `json:"id"`
+	}](t, created).ID
+	approved := postJSON(engine, fmt.Sprintf("/api/ticket/instances/%d/approve", ticketID), "", lin)
+	if approved.Code != http.StatusOK {
+		t.Fatalf("审批 = %d %s", approved.Code, approved.Body.String())
+	}
+	runID := decodeJSON[struct {
+		RunID uint `json:"runId"`
+	}](t, approved).RunID
+	view := decodeRun(t, getAuth(engine, fmt.Sprintf("/api/playbook/runs/%d", runID), lin))
+	if view.Status != "paused" {
+		t.Fatalf("第一批 = %s %+v", view.Status, view.Steps)
+	}
+	if imageOf(t, engine, lin, "order-api", "生产") != "order-api:1.9.4" {
+		t.Fatal("第一批等待前没有写镜像")
+	}
+	var batch1 uint
+	for _, step := range view.Steps {
+		if step.Key == "verify" || step.Key == "confirm" || step.Key == "skip" {
+			t.Fatalf("策略不该来自入参 %+v", view.Steps)
+		}
+		if step.Key == "deploy" && step.Output["executor"] != "platform" {
+			t.Fatalf("执行器 = %+v", step.Output)
+		}
+		if step.Key == "batch1" && step.Status == "waiting" {
+			batch1 = step.ID
+		}
+	}
+	if batch1 == 0 {
+		t.Fatalf("没有第一批 %+v", view.Steps)
+	}
+	dup := postJSON(engine, "/api/playbook/runs", fmt.Sprintf(`{"playbook":"release.prod.single","idempotencyKey":"%d","input":{"ticket_id":%d,"tree_node_id":%d,"release_item_id":%d,"image_tag":"1.9.4","clusters":[%d]}}`, ticketID, ticketID, order.ID, itemID, clusterID), lin)
+	if dup.Code != http.StatusConflict {
+		t.Fatalf("未结束再次发布 = %d %s", dup.Code, dup.Body.String())
+	}
+	next := postJSON(engine, fmt.Sprintf("/api/playbook/runs/%d/continue", view.ID), fmt.Sprintf(`{"stepId":%d,"version":%d}`, batch1, view.Version), lin)
+	if next.Code != http.StatusOK {
+		t.Fatalf("继续第一批 = %d %s", next.Code, next.Body.String())
+	}
+	held := decodeRun(t, next)
+	if held.Status != "paused" {
+		t.Fatalf("第二批 = %s %+v", held.Status, held.Steps)
+	}
+	var batch2 uint
+	for _, step := range held.Steps {
+		if step.Key == "batch1" && step.Status != "success" {
+			t.Fatalf("第一批没有完成 %+v", held.Steps)
+		}
+		if step.Key == "batch2" && step.Status == "waiting" {
+			batch2 = step.ID
+		}
+	}
+	if batch2 == 0 {
+		t.Fatalf("没有第二批 %+v", held.Steps)
+	}
+	done := postJSON(engine, fmt.Sprintf("/api/playbook/runs/%d/continue", held.ID), fmt.Sprintf(`{"stepId":%d,"version":%d}`, batch2, held.Version), lin)
+	if done.Code != http.StatusOK {
+		t.Fatalf("继续第二批 = %d %s", done.Code, done.Body.String())
+	}
+	if decodeRun(t, done).Status != "success" {
+		t.Fatalf("分批结束 = %+v", decodeRun(t, done))
+	}
+
+	backPayload := fmt.Sprintf(`{"release_item_id":%d,"previous_tag":"1.8.3","clusters":[%d]}`, itemID, clusterID)
+	backTicket := postJSON(engine, "/api/ticket/instances", fmt.Sprintf(`{"templateId":%d,"treeNodeId":%d,"title":"分批回滚","payload":%q}`, rollbackTpl, order.ID, backPayload), chen)
+	if backTicket.Code != http.StatusOK {
+		t.Fatalf("回滚单 = %d %s", backTicket.Code, backTicket.Body.String())
+	}
+	backID := decodeJSON[struct {
+		ID uint `json:"id"`
+	}](t, backTicket).ID
+	backApproved := postJSON(engine, fmt.Sprintf("/api/ticket/instances/%d/approve", backID), "", lin)
+	if backApproved.Code != http.StatusOK {
+		t.Fatalf("审批回滚 = %d %s", backApproved.Code, backApproved.Body.String())
+	}
+	backRunID := decodeJSON[struct {
+		RunID uint `json:"runId"`
+	}](t, backApproved).RunID
+	backView := decodeRun(t, getAuth(engine, fmt.Sprintf("/api/playbook/runs/%d", backRunID), lin))
+	if backView.Status != "paused" || imageOf(t, engine, lin, "order-api", "生产") != "order-api:1.8.3" {
+		t.Fatalf("回滚 = %s %s %+v", backView.Status, imageOf(t, engine, lin, "order-api", "生产"), backView.Steps)
+	}
+	sawBatch := false
+	for _, step := range backView.Steps {
+		if step.Key == "batch1" && step.Status == "waiting" {
+			sawBatch = true
+		}
+	}
+	if !sawBatch {
+		t.Fatalf("回滚没有走批次 %+v", backView.Steps)
 	}
 }
 

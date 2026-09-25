@@ -236,6 +236,7 @@ func applyRelease(db *gorm.DB, userID uint, mapped map[string]any) (map[string]a
 		"app_instance_id": instance.ID,
 		"revision":        instance.ID,
 		"image_tag":       image,
+		"executor":        "platform",
 	}, "success", nil
 }
 

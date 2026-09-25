@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -214,6 +215,13 @@ func resolve(db *gorm.DB, c *gin.Context, resource string) (uint, bool, error) {
 			return row.NodeID, err == nil, err
 		})
 	case ResReleaseItem:
+		if strings.Contains(c.FullPath(), "/cicd/items/") && c.Param("id") != "" {
+			return rowNode(db, c.Param("id"), func(id uint) (uint, bool, error) {
+				var item model.DeployItem
+				err := db.First(&item, id).Error
+				return item.TreeNodeID, err == nil, err
+			})
+		}
 		if c.Param("id") == "" {
 			return bodyNode(c, "treeNodeId")
 		}

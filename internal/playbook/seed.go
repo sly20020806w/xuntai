@@ -53,12 +53,12 @@ func Seed(db *gorm.DB) (bool, error) {
 		},
 		{
 			code: "release.prod.single", name: "生产单次发布",
-			schema: `{"required":["ticket_id","tree_node_id","release_item_id","image_tag","clusters"],"optional":["verify_url"]}`,
+			schema: `{"required":["ticket_id","tree_node_id","release_item_id","image_tag","clusters"]}`,
 			steps:  releaseSteps(`{"tree_node_id":"{{ run.input.tree_node_id }}","release_item_id":"{{ run.input.release_item_id }}","image_tag":"{{ run.input.image_tag }}","clusters":"{{ run.input.clusters }}"}`),
 		},
 		{
 			code: "release.prod.rollback", name: "生产回滚",
-			schema: `{"required":["ticket_id","tree_node_id","release_item_id","previous_tag","clusters"],"optional":["verify_url"]}`,
+			schema: `{"required":["ticket_id","tree_node_id","release_item_id","previous_tag","clusters"]}`,
 			steps:  releaseSteps(`{"tree_node_id":"{{ run.input.tree_node_id }}","release_item_id":"{{ run.input.release_item_id }}","previous_tag":"{{ run.input.previous_tag }}","clusters":"{{ run.input.clusters }}"}`),
 		},
 	}

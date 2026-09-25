@@ -16,7 +16,7 @@
 | `POST /api/cicd/orders/:id/confirm`，当前阶段是生产 | 返回 409。不写生产镜像，不把发布单标完成，也不结束工单。构建和预发仍按原样确认，预发仍写开发环境镜像 |
 | 剧本 `k8s_apply`（`release.prod.single` / `release.prod.rollback`） | 保留。部署步在人工确认之前写入镜像 |
 
-发布页里，暂停的剧本行点「继续」。它调用 `POST /api/playbook/runs/:id/continue`，请求体是当前等待步骤的 `stepId`、Run 的 `version`，以及 `continueInput`。没有 `verify_url` 时，这一步成功后工单变为 `finished`。生产阶段的「确认当前阶段」不会改成这次调用，因为那张发布单上没有 `run_id`、步骤和版本。
+发布页里，暂停的剧本行点「继续」。它调用 `POST /api/playbook/runs/:id/continue`，请求体是当前等待步骤的 `stepId`、Run 的 `version`，以及 `continueInput`。人工等待都走完、并且发布项上没有校验地址时，Run 成功后工单变为 `finished`。生产阶段的「确认当前阶段」不会改成这次调用，因为那张发布单上没有 `run_id`、步骤和版本。
 
 同一个剧本加同一个幂等键，同时只能有一条未结束的 Run，再触发返回 409。成功、失败、取消之后，同一个键可以再开一条。重试会复制输入新建 Run，并换成 `原键:序号`。还在跑或暂停的原 Run 改成取消，审计里写「由重试取代」。已经失败的原 Run 保持失败，只补审计。
 
@@ -31,8 +31,8 @@
 | 编码 | 步骤 |
 |---|---|
 | inspect.host.baseline | task_run `run_inspect`，不需要工单。没有代理时结果停在 `issued`，Run 保持 `running`。只有 `XUNTAI_TASK_MOCK=1` 时，启动或同步会按 `task.Report` 回写：入参 `task_mock` 为 `failed` 记失败，否则记成功。没开这个变量时忽略 `task_mock` |
-| release.prod.single | ticket_gate `gate`，k8s_apply `deploy`，wait_manual `confirm`。入参里有 `verify_url` 才追加 http_call。只有这一步的 `k8s_apply` 能改生产镜像 |
-| release.prod.rollback | 与单次发布相同，镜像用 `previous_tag`。生产镜像同样只走这里的 `k8s_apply` |
+| release.prod.single | ticket_gate `gate`，k8s_apply `deploy`，然后是人工等待。发布项对象上不足两批时仍是一步 `confirm`；两批及以上展开成对应的 `wait_manual`，每批暂停、继续都走剧本步骤。校验地址和批次只从发布项对象读，不从 Run 入参读。只有 `k8s_apply` 能改生产镜像，执行器固定是平台自己，不调用灰度组件 |
+| release.prod.rollback | 与单次发布同一套步骤，镜像用 `previous_tag` |
 
 参数只有四种写法：`{{ run.input.X }}`、`{{ steps.步骤.output.Y }}`、`{{ run.context.Z }}`、字面量。对不上就让这一步失败。`run.context` 只在人工确认并入，或重试时原样带走。
 

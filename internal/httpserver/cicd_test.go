@@ -13,6 +13,7 @@ import (
 	"xuntai/internal/access"
 	apibase "xuntai/internal/api/base"
 	apicicd "xuntai/internal/api/cicd"
+	apicmdb "xuntai/internal/api/cmdb"
 	apik8s "xuntai/internal/api/k8s"
 	apimonitor "xuntai/internal/api/monitor"
 	apitask "xuntai/internal/api/task"
@@ -20,6 +21,7 @@ import (
 	apitree "xuntai/internal/api/tree"
 	"xuntai/internal/base"
 	cicdcore "xuntai/internal/cicd"
+	"xuntai/internal/cmdb"
 	"xuntai/internal/k8s"
 	"xuntai/internal/model"
 	"xuntai/internal/monitor"
@@ -45,6 +47,7 @@ func TestReleaseStagesAndRepublish(t *testing.T) {
 		func(db *gorm.DB) error { _, err := monitor.Seed(db); return err },
 		func(db *gorm.DB) error { _, err := k8s.Seed(db); return err },
 		func(db *gorm.DB) error { _, err := cicdcore.Seed(db); return err },
+		func(db *gorm.DB) error { _, err := cmdb.Seed(db); return err },
 	}
 	for _, step := range steps {
 		if err := step(db); err != nil {
@@ -63,6 +66,7 @@ func TestReleaseStagesAndRepublish(t *testing.T) {
 		Monitor: apimonitor.Deps{DB: db},
 		K8s:     apik8s.Deps{DB: db},
 		Cicd:    apicicd.Deps{DB: db},
+		Cmdb:    apicmdb.Deps{DB: db},
 	})
 	for _, route := range engine.Routes() {
 		if route.Path == "/api/cicd/rollback" {
@@ -102,11 +106,53 @@ func TestReleaseStagesAndRepublish(t *testing.T) {
 		t.Fatal("确认生产阶段改了生产镜像")
 	}
 
-	items := decodeJSON[[]namedID](t, getAuth(engine, "/api/cicd/items", lin))
-	item := mustNamed(t, items, "order-api")
 	nodes := decodeNodes(t, getAuth(engine, "/api/tree/nodes", lin))
 	orderNode := mustNode(t, nodes, "订单")
 	trade := mustNode(t, nodes, "交易")
+	items := decodeJSON[[]itemJSON](t, getAuth(engine, "/api/cicd/items", lin))
+	item := mustItem(t, items, "order-api")
+	if item.ObjectID == 0 || item.NodeName != "订单" {
+		t.Fatalf("发布项对象 = %+v", item)
+	}
+	detail := decodeJSON[itemJSON](t, getAuth(engine, fmt.Sprintf("/api/cicd/items/%d", item.ID), lin))
+	if detail.Repo != "git.local/order-api" || detail.Strategy != "manual" || detail.Executor != "" || detail.ObjectID != item.ObjectID {
+		t.Fatalf("发布项详情 = %+v", detail)
+	}
+	byNode := decodeJSON[[]itemJSON](t, getAuth(engine, fmt.Sprintf("/api/cicd/items?nodeId=%d", orderNode.ID), lin))
+	if _, ok := findItem(byNode, "order-api"); !ok {
+		t.Fatal("按节点查不到订单发布项")
+	}
+	byObject := decodeJSON[[]itemJSON](t, getAuth(engine, fmt.Sprintf("/api/cicd/items?objectId=%d", item.ObjectID), lin))
+	if _, ok := findItem(byObject, "order-api"); !ok {
+		t.Fatal("按对象查不到订单发布项")
+	}
+	if rec := getAuth(engine, fmt.Sprintf("/api/cicd/items/%d", item.ID), xu); rec.Code != http.StatusNotFound {
+		t.Fatalf("许衡看发布项 = %d %s", rec.Code, rec.Body.String())
+	}
+	objects := decodeJSON[[]namedID](t, getAuth(engine, "/api/cmdb/objects", lin))
+	if _, ok := findNamed(objects, "order-api"); !ok {
+		t.Fatal("服务树对象里没有发布项")
+	}
+	hiddenObjects := decodeJSON[[]namedID](t, getAuth(engine, "/api/cmdb/objects", xu))
+	if _, ok := findNamed(hiddenObjects, "order-api"); ok {
+		t.Fatal("许衡在服务树上看见了订单发布项")
+	}
+	var kept model.ReleaseOrder
+	if err := db.Where("tag = ?", "1.8.4").First(&kept).Error; err != nil || kept.ItemID != item.ID {
+		t.Fatalf("老发布单 = %+v %v", kept, err)
+	}
+	if rec := postJSON(engine, "/api/cicd/items", fmt.Sprintf(`{"name":"越权项","treeNodeId":%d,"executor":"argo"}`, orderNode.ID), lin); rec.Code != http.StatusBadRequest {
+		t.Fatalf("接入执行器 = %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := putJSON(engine, fmt.Sprintf("/api/cicd/items/%d", item.ID), `{"batches":["batch1","batch1"]}`, lin); rec.Code != http.StatusBadRequest {
+		t.Fatalf("重复批次 = %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := putJSON(engine, fmt.Sprintf("/api/cicd/items/%d", item.ID), `{"strategy":"manual"}`, xu); rec.Code != http.StatusForbidden {
+		t.Fatalf("许衡改发布项 = %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := putJSON(engine, fmt.Sprintf("/api/cicd/items/%d", item.ID), `{"strategy":"canary"}`, zhou); rec.Code != http.StatusOK {
+		t.Fatalf("周宁改发布策略 = %d %s", rec.Code, rec.Body.String())
+	}
 	if rec := postJSON(engine, "/api/cicd/items", fmt.Sprintf(`{"name":"越权项","treeNodeId":%d}`, orderNode.ID), zhou); rec.Code != http.StatusOK {
 		t.Fatalf("周宁建发布项 = %d %s", rec.Code, rec.Body.String())
 	}
@@ -181,6 +227,36 @@ type orderJSON struct {
 		Name   string `json:"name"`
 		Status string `json:"status"`
 	} `json:"stages"`
+}
+
+type itemJSON struct {
+	ID        uint     `json:"id"`
+	Name      string   `json:"name"`
+	NodeName  string   `json:"nodeName"`
+	ObjectID  uint     `json:"objectId"`
+	Repo      string   `json:"repo"`
+	Strategy  string   `json:"strategy"`
+	Executor  string   `json:"executor"`
+	Batches   []string `json:"batches"`
+	VerifyURL string   `json:"verifyUrl"`
+}
+
+func mustItem(t *testing.T, rows []itemJSON, name string) itemJSON {
+	t.Helper()
+	row, ok := findItem(rows, name)
+	if !ok {
+		t.Fatalf("没有发布项 %s", name)
+	}
+	return row
+}
+
+func findItem(rows []itemJSON, name string) (itemJSON, bool) {
+	for _, row := range rows {
+		if row.Name == name {
+			return row, true
+		}
+	}
+	return itemJSON{}, false
 }
 
 func stagePending(order orderJSON, name string) bool {

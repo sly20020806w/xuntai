@@ -8,6 +8,7 @@ type DeployItem struct {
 	TreeNodeID uint
 	Repo       string `gorm:"size:255"`
 	ImageName  string `gorm:"size:255"`
+	ObjectID   uint
 }
 
 func (DeployItem) TableName() string { return "cicd_deploy_items" }

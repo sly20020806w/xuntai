@@ -11,6 +11,8 @@ func APICatalog() []model.API {
 	return []model.API{
 		{Method: "GET", Path: "/api/cicd/items"},
 		{Method: "POST", Path: "/api/cicd/items"},
+		{Method: "GET", Path: "/api/cicd/items/:id"},
+		{Method: "PUT", Path: "/api/cicd/items/:id"},
 		{Method: "GET", Path: "/api/cicd/orders"},
 		{Method: "POST", Path: "/api/cicd/orders"},
 		{Method: "POST", Path: "/api/cicd/orders/:id/confirm"},
@@ -29,7 +31,7 @@ func Seed(db *gorm.DB) (bool, error) {
 		return false, err
 	}
 	if count > 0 {
-		return false, nil
+		return false, EnsureAll(db)
 	}
 	err := db.Transaction(func(tx *gorm.DB) error {
 		orderNode, err := nodeID(tx, "订单")
@@ -46,6 +48,9 @@ func Seed(db *gorm.DB) (bool, error) {
 			return err
 		}
 		if err := tx.Create(&payItem).Error; err != nil {
+			return err
+		}
+		if err := EnsureAll(tx); err != nil {
 			return err
 		}
 		if _, err := Open(tx, payItem.ID, "2.2.0-dev", "开发", 0); err != nil {
