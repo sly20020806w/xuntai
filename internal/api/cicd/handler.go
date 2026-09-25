@@ -248,6 +248,8 @@ func (h handler) writeErr(c *gin.Context, err error) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "工单不在这个节点上"})
 	case errors.Is(err, cicdcore.ErrNoStage):
 		c.JSON(http.StatusBadRequest, gin.H{"error": "这张单没有待确认的阶段"})
+	case errors.Is(err, cicdcore.ErrProdStage):
+		c.JSON(http.StatusConflict, gin.H{"error": "生产镜像请走生产发布或回滚剧本"})
 	case errors.Is(err, cicdcore.ErrNoInstance):
 		c.JSON(http.StatusBadRequest, gin.H{"error": "没有对应的实例"})
 	case errors.Is(err, cicdcore.ErrBadEnv):

@@ -11,4 +11,5 @@ var (
 	ErrBadEnv      = errors.New("bad env")
 	ErrNotLeaf     = errors.New("not leaf")
 	ErrNotFound    = errors.New("not found")
+	ErrProdStage   = errors.New("prod stage")
 )

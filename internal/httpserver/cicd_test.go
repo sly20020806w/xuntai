@@ -94,11 +94,12 @@ func TestReleaseStagesAndRepublish(t *testing.T) {
 	if rec := postJSON(engine, confirmPath, "", chen); rec.Code != http.StatusForbidden {
 		t.Fatalf("陈舟确认 = %d %s", rec.Code, rec.Body.String())
 	}
-	if rec := postJSON(engine, confirmPath, "", lin); rec.Code != http.StatusOK {
+	beforeProd := imageOf(t, engine, lin, "order-api", "生产")
+	if rec := postJSON(engine, confirmPath, "", lin); rec.Code != http.StatusConflict {
 		t.Fatalf("林夏确认生产 = %d %s", rec.Code, rec.Body.String())
 	}
-	if imageOf(t, engine, lin, "order-api", "生产") != "order-api:1.8.4" {
-		t.Fatal("确认生产后镜像没有换成新标签")
+	if imageOf(t, engine, lin, "order-api", "生产") != beforeProd {
+		t.Fatal("确认生产阶段改了生产镜像")
 	}
 
 	items := decodeJSON[[]namedID](t, getAuth(engine, "/api/cicd/items", lin))
@@ -156,17 +157,17 @@ func TestReleaseStagesAndRepublish(t *testing.T) {
 	if err := json.Unmarshal(rollback.Body.Bytes(), &again); err != nil {
 		t.Fatal(err)
 	}
-	for i := 0; i < 3; i++ {
+	for i := 0; i < 2; i++ {
 		rec := postJSON(engine, fmt.Sprintf("/api/cicd/orders/%d/confirm", again.ID), "", lin)
 		if rec.Code != http.StatusOK {
 			t.Fatalf("确认第 %d 阶段 = %d %s", i+1, rec.Code, rec.Body.String())
 		}
 	}
-	if imageOf(t, engine, lin, "order-api", "生产") != "order-api:1.8.3" {
-		t.Fatal("再发旧标签后镜像没有回去")
+	if rec := postJSON(engine, fmt.Sprintf("/api/cicd/orders/%d/confirm", again.ID), "", lin); rec.Code != http.StatusConflict {
+		t.Fatalf("确认生产阶段 = %d %s", rec.Code, rec.Body.String())
 	}
-	if rec := postJSON(engine, fmt.Sprintf("/api/cicd/orders/%d/confirm", again.ID), "", lin); rec.Code != http.StatusBadRequest {
-		t.Fatalf("重复确认 = %d %s", rec.Code, rec.Body.String())
+	if imageOf(t, engine, lin, "order-api", "生产") != beforeProd {
+		t.Fatal("生产阶段确认改了生产镜像")
 	}
 }
 

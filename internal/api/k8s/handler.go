@@ -275,6 +275,24 @@ func (h handler) updateInstance(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "需要镜像和副本"})
 		return
 	}
+	var cluster model.Cluster
+	if err := h.deps.DB.First(&cluster, row.ClusterID).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "没有这个集群"})
+		return
+	}
+	if cluster.Env == "生产" {
+		var app model.App
+		if err := h.deps.DB.First(&app, row.AppID).Error; err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "没有这个应用"})
+			return
+		}
+		project, ok := h.findProject(c, app.ProjectID)
+		if !ok || !h.requireOps(c, project.TreeNodeID) {
+			return
+		}
+		c.JSON(http.StatusConflict, gin.H{"error": "生产镜像请走生产发布或回滚剧本"})
+		return
+	}
 	if !h.allowDesired(c, row.AppID, row.ClusterID, body.TicketID) {
 		return
 	}

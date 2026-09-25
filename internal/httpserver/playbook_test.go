@@ -360,6 +360,122 @@ func newRunKey(t *testing.T, db *gorm.DB, id uint) string {
 	return row.IdempotencyKey
 }
 
+func TestProductionImageOnlyFromPlaybook(t *testing.T) {
+	engine, db := playEngine(t)
+	lin := loginName(t, engine, "林夏", "secret")
+	chen := loginName(t, engine, "陈舟", "secret")
+	nodes := decodeNodes(t, getAuth(engine, "/api/tree/nodes", lin))
+	order := mustNode(t, nodes, "订单")
+	before := imageOf(t, engine, lin, "order-api", "生产")
+	prod := mustInstance(t, decodeJSON[[]instanceJSON](t, getAuth(engine, "/api/k8s/instances", lin)), "order-api", "生产")
+
+	tickets := decodeJSON[[]struct {
+		ID     uint   `json:"id"`
+		Title  string `json:"title"`
+		Status string `json:"status"`
+	}](t, getAuth(engine, "/api/ticket/instances", lin))
+	var changeID uint
+	for _, row := range tickets {
+		if row.Title == "订单库升配" {
+			changeID = row.ID
+		}
+	}
+	if rec := postJSON(engine, fmt.Sprintf("/api/ticket/instances/%d/approve", changeID), "", lin); rec.Code != http.StatusOK {
+		t.Fatalf("审批变更单 = %d %s", rec.Code, rec.Body.String())
+	}
+	body := fmt.Sprintf(`{"image":"order-api:9.9.9","replicas":9,"ticketId":%d}`, changeID)
+	if rec := putJSON(engine, fmt.Sprintf("/api/k8s/instances/%d", prod.ID), body, lin); rec.Code != http.StatusConflict {
+		t.Fatalf("生产实例写入 = %d %s", rec.Code, rec.Body.String())
+	}
+	if imageOf(t, engine, lin, "order-api", "生产") != before {
+		t.Fatal("实例接口改了生产镜像")
+	}
+	kept := mustInstance(t, decodeJSON[[]instanceJSON](t, getAuth(engine, "/api/k8s/instances", lin)), "order-api", "生产")
+	if kept.Image != prod.Image {
+		t.Fatal("生产镜像变了")
+	}
+
+	orders := decodeJSON[[]orderJSON](t, getAuth(engine, "/api/cicd/orders", lin))
+	waiting := mustOrder(t, orders, "order-api", "1.8.4")
+	if rec := postJSON(engine, fmt.Sprintf("/api/cicd/orders/%d/confirm", waiting.ID), "", lin); rec.Code != http.StatusConflict {
+		t.Fatalf("确认生产阶段 = %d %s", rec.Code, rec.Body.String())
+	}
+	if imageOf(t, engine, lin, "order-api", "生产") != before {
+		t.Fatal("确认生产阶段改了镜像")
+	}
+
+	items := decodeJSON[[]namedID](t, getAuth(engine, "/api/cicd/items", lin))
+	var itemID uint
+	for _, item := range items {
+		if item.Name == "order-api" {
+			itemID = item.ID
+		}
+	}
+	var clusterID uint
+	for _, cluster := range decodeJSON[[]struct {
+		ID  uint   `json:"id"`
+		Env string `json:"env"`
+	}](t, getAuth(engine, "/api/k8s/clusters", lin)) {
+		if cluster.Env == "生产" {
+			clusterID = cluster.ID
+		}
+	}
+	var releaseTpl uint
+	for _, tpl := range decodeJSON[[]namedID](t, getAuth(engine, "/api/ticket/templates", chen)) {
+		if tpl.Name == "生产发布" {
+			releaseTpl = tpl.ID
+		}
+	}
+	payload := fmt.Sprintf(`{"release_item_id":%d,"image_tag":"1.9.2","clusters":[%d]}`, itemID, clusterID)
+	created := postJSON(engine, "/api/ticket/instances", fmt.Sprintf(`{"templateId":%d,"treeNodeId":%d,"title":"只走剧本","payload":%q}`, releaseTpl, order.ID, payload), chen)
+	if created.Code != http.StatusOK {
+		t.Fatalf("提单 = %d %s", created.Code, created.Body.String())
+	}
+	ticketID := decodeJSON[struct {
+		ID uint `json:"id"`
+	}](t, created).ID
+	approved := postJSON(engine, fmt.Sprintf("/api/ticket/instances/%d/approve", ticketID), "", lin)
+	if approved.Code != http.StatusOK {
+		t.Fatalf("审批生产发布 = %d %s", approved.Code, approved.Body.String())
+	}
+	runID := decodeJSON[struct {
+		RunID uint `json:"runId"`
+	}](t, approved).RunID
+	if imageOf(t, engine, lin, "order-api", "生产") != "order-api:1.9.2" {
+		t.Fatal("剧本部署没有改镜像")
+	}
+	if rec := postJSON(engine, fmt.Sprintf("/api/cicd/orders/%d/confirm", waiting.ID), "", lin); rec.Code != http.StatusConflict {
+		t.Fatalf("确认不能收工单 = %d %s", rec.Code, rec.Body.String())
+	}
+	var ticketRow model.TicketInstance
+	if err := db.First(&ticketRow, ticketID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if ticketRow.Status != "pending_action" {
+		t.Fatalf("确认接口把工单收成 %s", ticketRow.Status)
+	}
+	view := decodeRun(t, getAuth(engine, fmt.Sprintf("/api/playbook/runs/%d", runID), lin))
+	var stepID uint
+	for _, step := range view.Steps {
+		if step.Key == "confirm" {
+			stepID = step.ID
+		}
+	}
+	continued := postJSON(engine, fmt.Sprintf("/api/playbook/runs/%d/continue", runID), fmt.Sprintf(`{"stepId":%d,"version":%d,"continueInput":{}}`, stepID, view.Version), lin)
+	if continued.Code != http.StatusOK {
+		t.Fatalf("继续 = %d %s", continued.Code, continued.Body.String())
+	}
+	if decodeRun(t, continued).Status != "success" {
+		t.Fatal("没有校验地址时执行没有完成")
+	}
+	if err := db.First(&ticketRow, ticketID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if ticketRow.Status != "finished" {
+		t.Fatalf("继续后工单 = %s", ticketRow.Status)
+	}
+}
+
 func playEngine(t *testing.T) (*gin.Engine, *gorm.DB) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)

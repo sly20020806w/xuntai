@@ -136,21 +136,21 @@ func TestClusterRecordAndProdTicket(t *testing.T) {
 	if rec := putJSON(engine, fmt.Sprintf("/api/k8s/instances/%d", prod.ID), body, chen); rec.Code != http.StatusForbidden {
 		t.Fatalf("陈舟改生产镜像 = %d %s", rec.Code, rec.Body.String())
 	}
-	if rec := putJSON(engine, fmt.Sprintf("/api/k8s/instances/%d", prod.ID), body, lin); rec.Code != http.StatusBadRequest {
+	if rec := putJSON(engine, fmt.Sprintf("/api/k8s/instances/%d", prod.ID), body, lin); rec.Code != http.StatusConflict {
 		t.Fatalf("未审批就改生产 = %d %s", rec.Code, rec.Body.String())
 	}
 	if rec := postJSON(engine, fmt.Sprintf("/api/ticket/instances/%d/approve", ticketID), "", lin); rec.Code != http.StatusOK {
 		t.Fatalf("林夏审批 = %d %s", rec.Code, rec.Body.String())
 	}
-	if rec := putJSON(engine, fmt.Sprintf("/api/k8s/instances/%d", prod.ID), body, lin); rec.Code != http.StatusOK {
+	if rec := putJSON(engine, fmt.Sprintf("/api/k8s/instances/%d", prod.ID), body, lin); rec.Code != http.StatusConflict {
 		t.Fatalf("审批后改生产 = %d %s", rec.Code, rec.Body.String())
 	}
 	if rec := putJSON(engine, fmt.Sprintf("/api/k8s/instances/%d", dev.ID), `{"image":"order-api:1.8.4-dev","replicas":1}`, lin); rec.Code != http.StatusOK {
 		t.Fatalf("开发环境改镜像 = %d %s", rec.Code, rec.Body.String())
 	}
 	again := decodeJSON[[]instanceJSON](t, getAuth(engine, "/api/k8s/instances", lin))
-	if mustInstance(t, again, "order-api", "生产").Image != "order-api:1.8.4" {
-		t.Fatal("生产镜像没有改成新标签")
+	if mustInstance(t, again, "order-api", "生产").Image != prod.Image {
+		t.Fatal("生产镜像被实例接口改掉了")
 	}
 }
 

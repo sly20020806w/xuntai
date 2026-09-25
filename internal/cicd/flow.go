@@ -68,7 +68,7 @@ func Open(db *gorm.DB, itemID uint, tag, env string, ticketID uint) (model.Relea
 	return order, err
 }
 
-// Confirm 确认当前停着的阶段。生产阶段通过后，把标签写进对应实例。
+// Confirm 确认当前停着的阶段。生产阶段不在这里写镜像，也不结束工单。
 func Confirm(db *gorm.DB, orderID uint) error {
 	return db.Transaction(func(tx *gorm.DB) error {
 		var order model.ReleaseOrder
@@ -89,6 +89,9 @@ func Confirm(db *gorm.DB, orderID uint) error {
 		if current == nil {
 			return ErrNoStage
 		}
+		if current.Name == "生产" {
+			return ErrProdStage
+		}
 		res := tx.Model(&model.ReleaseStage{}).Where("id = ? AND status = ?", current.ID, "pending").Update("status", "done")
 		if res.Error != nil {
 			return res.Error
@@ -107,17 +110,6 @@ func Confirm(db *gorm.DB, orderID uint) error {
 				return nil
 			}
 			return err
-		case "生产":
-			if err := applyImage(tx, item, "生产", order.Tag); err != nil {
-				return err
-			}
-			if err := tx.Model(&order).Update("status", "finished").Error; err != nil {
-				return err
-			}
-			if order.TicketID != 0 {
-				return tx.Model(&model.TicketInstance{}).Where("id = ?", order.TicketID).
-					Updates(map[string]any{"status": "finished", "current_node": ""}).Error
-			}
 		}
 		return nil
 	})
