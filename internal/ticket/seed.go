@@ -30,7 +30,10 @@ func Seed(db *gorm.DB) (bool, error) {
 		return false, err
 	}
 	if count > 0 {
-		return false, ensureReleaseTemplates(db)
+		if err := ensureReleaseTemplates(db); err != nil {
+			return false, err
+		}
+		return false, ensureDBTemplates(db)
 	}
 	err := db.Transaction(func(tx *gorm.DB) error {
 		tpl := model.TicketTemplate{
@@ -76,7 +79,38 @@ func Seed(db *gorm.DB) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	return true, ensureReleaseTemplates(db)
+	if err := ensureReleaseTemplates(db); err != nil {
+		return false, err
+	}
+	return true, ensureDBTemplates(db)
+}
+
+func ensureDBTemplates(db *gorm.DB) error {
+	specs := []struct {
+		name, form string
+	}{
+		{"建库", `{"fields":["实例","库名"]}`},
+		{"建账号", `{"fields":["实例","账号"]}`},
+		{"SQL变更", `{"fields":["实例","语句"]}`},
+	}
+	for _, spec := range specs {
+		var count int64
+		if err := db.Model(&model.TicketTemplate{}).Where("name = ?", spec.name).Count(&count).Error; err != nil {
+			return err
+		}
+		if count > 0 {
+			continue
+		}
+		row := model.TicketTemplate{
+			Name:     spec.name,
+			FormJSON: spec.form,
+			FlowJSON: `{"steps":["approve","run"]}`,
+		}
+		if err := db.Create(&row).Error; err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func ensureReleaseTemplates(db *gorm.DB) error {

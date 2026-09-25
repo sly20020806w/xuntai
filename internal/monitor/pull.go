@@ -2,6 +2,7 @@ package monitor
 
 import (
 	"fmt"
+	"strings"
 
 	"gorm.io/gorm"
 
@@ -50,9 +51,36 @@ func Pull(db *gorm.DB, poolID uint) (PullFile, error) {
 				item.Targets = append(item.Targets, fmt.Sprintf("%s:%d", ip, job.Port))
 			}
 		}
+		if job.Discover == "db" {
+			targets, err := dbTargets(db, job)
+			if err != nil {
+				return file, err
+			}
+			item.Targets = append(item.Targets, targets...)
+		}
 		file.Jobs = append(file.Jobs, item)
 	}
 	return file, nil
+}
+
+func dbTargets(db *gorm.DB, job model.ScrapeJob) ([]string, error) {
+	var rows []model.Instance
+	if err := db.Where("tree_node_id = ?", job.TreeNodeID).Order("id").Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(rows))
+	for _, row := range rows {
+		addr := strings.TrimSpace(row.MonitorAddr)
+		if addr == "" {
+			port := job.Port
+			if port == 0 {
+				port = 9104
+			}
+			addr = fmt.Sprintf("%s:%d", row.Host, port)
+		}
+		out = append(out, addr)
+	}
+	return out, nil
 }
 
 func leafIPs(db *gorm.DB, nodeID uint) ([]string, error) {

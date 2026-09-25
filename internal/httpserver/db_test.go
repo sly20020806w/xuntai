@@ -81,8 +81,15 @@ func TestDbRegistryAndRestoreTicket(t *testing.T) {
 	}
 	instances := decodeJSON[[]dbInstanceJSON](t, listed)
 	master := mustDbInstance(t, instances, "订单主库")
-	if master.Role != "主" || master.Running || master.Host != "10.8.2.17" {
+	if master.Role != "主" || master.Running || master.Host != "10.8.2.17" || master.ObjectID == 0 || master.Env != "生产" {
 		t.Fatalf("主库登记不对 %+v", master)
+	}
+	detail := getAuth(engine, fmt.Sprintf("/api/db/instances/%d", master.ID), lin)
+	if detail.Code != http.StatusOK || !strings.Contains(detail.Body.String(), "订单主库") || strings.Contains(detail.Body.String(), "password") {
+		t.Fatalf("实例详情 = %d %s", detail.Code, detail.Body.String())
+	}
+	if hiddenDetail := getAuth(engine, fmt.Sprintf("/api/db/instances/%d", master.ID), xu); hiddenDetail.Code != http.StatusNotFound {
+		t.Fatalf("许衡看实例 = %d %s", hiddenDetail.Code, hiddenDetail.Body.String())
 	}
 	slave := mustDbInstance(t, instances, "订单从库")
 	if slave.MasterID != master.ID || slave.MasterName != "订单主库" || slave.Running {
@@ -95,8 +102,11 @@ func TestDbRegistryAndRestoreTicket(t *testing.T) {
 	nodes := decodeNodes(t, getAuth(engine, "/api/tree/nodes", lin))
 	orderNode := mustNode(t, nodes, "订单")
 	trade := mustNode(t, nodes, "交易")
-	if rec := postJSON(engine, "/api/db/instances", fmt.Sprintf(`{"name":"越权库","treeNodeId":%d,"host":"10.8.2.17","port":3307,"version":"8.0","role":"从","masterId":%d}`, orderNode.ID, master.ID), zhou); rec.Code != http.StatusForbidden {
-		t.Fatalf("周宁登记实例 = %d %s", rec.Code, rec.Body.String())
+	if rec := postJSON(engine, "/api/db/instances", fmt.Sprintf(`{"name":"越权库","treeNodeId":%d,"host":"10.8.2.17","port":3307,"version":"8.0","role":"从","masterId":%d}`, orderNode.ID, master.ID), xu); rec.Code != http.StatusForbidden {
+		t.Fatalf("许衡登记实例 = %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := postJSON(engine, "/api/db/instances", `{"name":"悬空库","host":"10.8.2.17","version":"8.0","role":"主"}`, lin); rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "资源未挂载到服务树，无法校验归属") {
+		t.Fatalf("未挂树实例 = %d %s", rec.Code, rec.Body.String())
 	}
 	if rec := postJSON(engine, "/api/db/instances", fmt.Sprintf(`{"name":"父节点库","treeNodeId":%d,"host":"10.8.2.17","version":"8.0","role":"主"}`, trade.ID), lin); rec.Code != http.StatusBadRequest {
 		t.Fatalf("父节点实例 = %d %s", rec.Code, rec.Body.String())
@@ -203,6 +213,8 @@ type dbInstanceJSON struct {
 	Role       string `json:"role"`
 	MasterID   uint   `json:"masterId"`
 	MasterName string `json:"masterName"`
+	ObjectID   uint   `json:"objectId"`
+	Env        string `json:"env"`
 	Running    bool   `json:"running"`
 }
 

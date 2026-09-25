@@ -109,7 +109,7 @@ func main() {
 		log.Fatal(err)
 	}
 	if playReady {
-		log.Printf("已补上三套剧本")
+		log.Printf("已补上剧本")
 	}
 	if playbook.TaskMock() {
 		log.Printf("巡检结果由本地模拟回写，生产环境不要打开")

@@ -20,6 +20,8 @@ func Drive(db *gorm.DB, ticket model.TicketInstance, userID uint) (uint, error) 
 		code = "release.prod.single"
 	case "生产回滚":
 		code = "release.prod.rollback"
+	case "建库", "建账号", "SQL变更":
+		code = "db.change"
 	default:
 		return 0, nil
 	}

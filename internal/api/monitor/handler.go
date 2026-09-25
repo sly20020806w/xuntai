@@ -156,8 +156,8 @@ func (h handler) createJob(c *gin.Context) {
 	if body.Discover == "" {
 		body.Discover = "tree"
 	}
-	if body.Discover != "tree" && body.Discover != "k8s" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "发现方式只能是服务树或集群"})
+	if body.Discover != "tree" && body.Discover != "k8s" && body.Discover != "db" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "发现方式只能是服务树、集群或数据库实例"})
 		return
 	}
 	var pool model.ScrapePool
@@ -173,11 +173,15 @@ func (h handler) createJob(c *gin.Context) {
 	if !h.requireOps(c, node.ID) {
 		return
 	}
-	if body.Discover == "tree" && !node.IsLeaf {
+	if (body.Discover == "tree" || body.Discover == "db") && !node.IsLeaf {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "只有叶子节点能按服务树发现"})
 		return
 	}
 	if body.Discover == "tree" && (body.Port < 1 || body.Port > 65535) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "需要采集端口"})
+		return
+	}
+	if body.Discover == "db" && body.Port != 0 && (body.Port < 1 || body.Port > 65535) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "需要采集端口"})
 		return
 	}

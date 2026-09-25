@@ -144,7 +144,7 @@ func advance(db *gorm.DB, runID uint, depth int) error {
 	case "waiting":
 		return setRunStatus(db, run.ID, []string{"running"}, "paused")
 	case "running":
-		if step.Kind != "task_run" {
+		if step.Kind != "task_run" && step.Kind != "db_exec" {
 			return nil
 		}
 		return dispatch(db, &run, &step, depth)
@@ -199,6 +199,8 @@ func dispatch(db *gorm.DB, run *model.Run, step *model.RunStep, depth int) error
 		output, status, stepErr = runTask(db, run.TriggerUserID, mapped, *run, step)
 	case "k8s_apply":
 		output, status, stepErr = applyRelease(db, run, mapped)
+	case "db_exec":
+		output, status, stepErr = applyDB(db, *run, step, mapped)
 	case "http_call":
 		output, status, stepErr = callHTTP(mapped)
 	case "wait_manual":

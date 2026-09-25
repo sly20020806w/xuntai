@@ -10,6 +10,7 @@ import (
 func APIs() []model.API {
 	return []model.API{
 		{Method: "GET", Path: "/api/db/instances"},
+		{Method: "GET", Path: "/api/db/instances/:id"},
 		{Method: "POST", Path: "/api/db/instances"},
 		{Method: "GET", Path: "/api/db/backups"},
 		{Method: "POST", Path: "/api/db/backups"},
@@ -31,7 +32,7 @@ func Seed(db *gorm.DB) (bool, error) {
 		return false, err
 	}
 	if count > 0 {
-		return false, nil
+		return false, EnsureAll(db)
 	}
 	err := db.Transaction(func(tx *gorm.DB) error {
 		orderNode, err := nodeID(tx, "订单")
@@ -43,13 +44,13 @@ func Seed(db *gorm.DB) (bool, error) {
 			return err
 		}
 		master := model.Instance{
-			Name: "订单主库", TreeNodeID: orderNode, Host: "10.8.2.17", Port: 3306, Version: "8.0", Role: "主",
+			Name: "订单主库", TreeNodeID: orderNode, Host: "10.8.2.17", Port: 3306, Version: "8.0", Role: "主", Env: "生产",
 		}
 		slave := model.Instance{
-			Name: "订单从库", TreeNodeID: orderNode, Host: "10.8.2.18", Port: 3306, Version: "8.0", Role: "从",
+			Name: "订单从库", TreeNodeID: orderNode, Host: "10.8.2.18", Port: 3306, Version: "8.0", Role: "从", Env: "生产",
 		}
 		pay := model.Instance{
-			Name: "支付主库", TreeNodeID: payNode, Host: "10.8.3.9", Port: 3306, Version: "8.0", Role: "主",
+			Name: "支付主库", TreeNodeID: payNode, Host: "10.8.3.9", Port: 3306, Version: "8.0", Role: "主", Env: "生产",
 		}
 		if err := tx.Create(&master).Error; err != nil {
 			return err
@@ -62,7 +63,10 @@ func Seed(db *gorm.DB) (bool, error) {
 			return err
 		}
 		backup := model.Backup{InstanceID: master.ID, Kind: "全量", Keep: 7, Status: "已登记"}
-		return tx.Create(&backup).Error
+		if err := tx.Create(&backup).Error; err != nil {
+			return err
+		}
+		return EnsureAll(tx)
 	})
 	return err == nil, err
 }

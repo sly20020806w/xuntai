@@ -4,14 +4,18 @@ package model
 // 还原要已审批的工单。不执行备份程序，也不把 MySQL 放进集群。
 
 type Instance struct {
-	ID         uint   `gorm:"primaryKey"`
-	Name       string `gorm:"size:128;not null"`
-	TreeNodeID uint   `gorm:"not null"`
-	Host       string `gorm:"size:64;uniqueIndex:idx_db_host_port"`
-	Port       int    `gorm:"uniqueIndex:idx_db_host_port"`
-	Version    string `gorm:"size:32"`
-	Role       string `gorm:"size:16"` // 主 或 从
-	MasterID   uint
+	ID          uint   `gorm:"primaryKey"`
+	Name        string `gorm:"size:128;not null"`
+	TreeNodeID  uint   `gorm:"not null"`
+	Host        string `gorm:"size:64;uniqueIndex:idx_db_host_port"`
+	Port        int    `gorm:"uniqueIndex:idx_db_host_port"`
+	Version     string `gorm:"size:32"`
+	Role        string `gorm:"size:16"` // 主 或 从
+	MasterID    uint
+	ObjectID    uint
+	Env         string `gorm:"size:16"` // 开发、测试或生产。空的按生产
+	LoginUser   string `gorm:"size:64"` // 连接账号，不存口令
+	MonitorAddr string `gorm:"size:128"`
 }
 
 func (Instance) TableName() string { return "db_instances" }

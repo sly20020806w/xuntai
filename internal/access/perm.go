@@ -32,6 +32,7 @@ const (
 	ResTicket      = "ticket"
 	ResPlaybookRun = "playbook_run"
 	ResTaskJob     = "task_job"
+	ResDBInstance  = "db_instance"
 )
 
 const (
@@ -69,7 +70,7 @@ func KnownVerb(verb string) bool {
 
 func KnownResource(resource string) bool {
 	switch resource {
-	case ResTree, ResModel, ResObject, ResObjectNode, ResInstance, ResReleaseItem, ResTicket, ResPlaybookRun, ResTaskJob:
+	case ResTree, ResModel, ResObject, ResObjectNode, ResInstance, ResReleaseItem, ResTicket, ResPlaybookRun, ResTaskJob, ResDBInstance:
 		return true
 	default:
 		return false
@@ -235,6 +236,15 @@ func resolve(db *gorm.DB, c *gin.Context, resource string) (uint, bool, error) {
 			return item.TreeNodeID, err == nil, err
 		})
 	case ResTaskJob:
+		return bodyNode(c, "treeNodeId")
+	case ResDBInstance:
+		if c.Param("id") != "" {
+			return rowNode(db, c.Param("id"), func(id uint) (uint, bool, error) {
+				var row model.Instance
+				err := db.First(&row, id).Error
+				return row.TreeNodeID, err == nil, err
+			})
+		}
 		return bodyNode(c, "treeNodeId")
 	default:
 		return 0, false, errors.New("unknown resource")

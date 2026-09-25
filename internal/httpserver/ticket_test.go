@@ -59,16 +59,21 @@ func TestTicketApprovalBeforeAction(t *testing.T) {
 	chen := loginName(t, engine, "陈舟", "secret")
 
 	templates := decodeJSON[[]map[string]any](t, getAuth(engine, "/api/ticket/templates", chen))
-	if len(templates) != 3 {
-		t.Fatalf("模板数量 = %d", len(templates))
-	}
+	names := map[string]bool{}
 	var templateID uint
 	for _, item := range templates {
 		if _, ok := item["status"]; ok {
 			t.Fatal("模板上出现了状态")
 		}
-		if item["name"] == "变更申请" {
+		name, _ := item["name"].(string)
+		names[name] = true
+		if name == "变更申请" {
 			templateID = uint(item["id"].(float64))
+		}
+	}
+	for _, name := range []string{"变更申请", "生产发布", "生产回滚", "建库", "建账号", "SQL变更"} {
+		if !names[name] {
+			t.Fatalf("缺少模板 %s，现有 %d 个", name, len(templates))
 		}
 	}
 	if templateID == 0 {

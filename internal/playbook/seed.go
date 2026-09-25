@@ -61,6 +61,14 @@ func Seed(db *gorm.DB) (bool, error) {
 			schema: `{"required":["ticket_id","tree_node_id","release_item_id","previous_tag","clusters"]}`,
 			steps:  releaseSteps(`{"tree_node_id":"{{ run.input.tree_node_id }}","release_item_id":"{{ run.input.release_item_id }}","previous_tag":"{{ run.input.previous_tag }}","clusters":"{{ run.input.clusters }}"}`),
 		},
+		{
+			code: "db.change", name: "数据库变更",
+			schema: `{"required":["ticket_id","tree_node_id","instance_id","action"]}`,
+			steps: []model.PlaybookStep{{
+				Seq: 1, StepKey: "exec", Kind: "db_exec", OnError: "stop",
+				InputMapping: `{"ticket_id":"{{ run.input.ticket_id }}","tree_node_id":"{{ run.input.tree_node_id }}","instance_id":"{{ run.input.instance_id }}","action":"{{ run.input.action }}"}`,
+			}},
+		},
 	}
 	for _, item := range books {
 		var have model.Playbook

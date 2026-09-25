@@ -13,7 +13,7 @@
 | approve | 审批。工单审批用这个动词 |
 | admin | 管理资源本身，例如模型、对象、发布项的增删改 |
 
-`resource_type` 也只在这个文件里声明：`tree`、`model`、`object`、`object_node`、`instance`、`release_item`、`ticket`、`playbook_run`、`task_job`。路由注册时写上动词和类型，不从请求体里信任调用方自称的类型。节点或对象编号仍从原有路径、请求体里取。
+`resource_type` 也只在这个文件里声明：`tree`、`model`、`object`、`object_node`、`instance`、`release_item`、`ticket`、`playbook_run`、`task_job`、`db_instance`。路由注册时写上动词和类型，不从请求体里信任调用方自称的类型。节点或对象编号仍从原有路径、请求体里取。`instance` 仍是集群里的应用实例，数据库实例用 `db_instance`。
 
 ## 接入清单
 
@@ -36,12 +36,13 @@
 | PUT /api/cicd/items/:id | admin | release_item | 403 | 通过 | 直过 |
 | POST /api/cicd/orders/:id/confirm | operate | release_item | 403 | 构建、预发通过；生产阶段 409 | 直过归属，生产仍 409 |
 | POST /api/task/jobs | operate | task_job | 403 | 通过 | 直过 |
+| POST /api/db/instances | admin | db_instance | 403 | 通过。实例必须挂在叶子上，没有节点仍拒绝 | 直过归属。没有节点仍拒绝 |
 
 剧本没有单独的暂停接口。执行停住来自人工等待或未审批关卡，恢复走继续。
 
 发布项已经对应一条 CMDB 对象，权限类型仍是 `release_item`。新建看请求里的节点，修改发布项看发布项自己的叶子，确认阶段仍从发布单找到发布项的叶子。这个叶子就是对象挂上的节点，所以无节点运维 403、有节点运维通过、平台管理员直过，和对象化之前一致。没有改成 `object`，是因为确认接口的路径编号是发布单，不是对象。
 
-提交工单、新建发布单、服务树、告警、数据库这些写接口保持原样。生产镜像写入无条件 409，无调试开关。仓库里没有 `XUNTAI_LEGACY_RELEASE`。生产镜像仍只允许剧本 `k8s_apply` 修改。同一幂等键的未结束 Run 仍返回 409。工单审批通过后仍只创建 Run，不在审批接口里改镜像。申请人不能审批或驳回自己的工单，判断在 `internal/api/ticket/handler.go` 的 `move`，自工单模块接上审批起就有。别人有该节点运维权限时，审批流程不变。
+提交工单、新建发布单、服务树、告警这些写接口保持原样。数据库实例登记改为上面的 `db_instance`。备份登记和还原登记仍用原来的节点运维判断，平台管理员不在这两条上直过。生产镜像写入无条件 409，无调试开关。仓库里没有 `XUNTAI_LEGACY_RELEASE`。生产镜像仍只允许剧本 `k8s_apply` 修改。同一幂等键的未结束 Run 仍返回 409。工单审批通过后仍只创建 Run，不在审批接口里改镜像。申请人不能审批或驳回自己的工单，判断在 `internal/api/ticket/handler.go` 的 `move`，自工单模块接上审批起就有。别人有该节点运维权限时，审批流程不变。
 
 ## P1 迭代收口
 

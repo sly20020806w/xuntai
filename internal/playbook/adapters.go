@@ -15,6 +15,7 @@ import (
 	"xuntai/internal/access"
 	"xuntai/internal/cicd"
 	"xuntai/internal/config"
+	dbmod "xuntai/internal/db"
 	"xuntai/internal/model"
 	"xuntai/internal/rollouts"
 	"xuntai/internal/task"
@@ -98,6 +99,79 @@ func runTask(db *gorm.DB, userID uint, mapped map[string]any, run model.Run, ste
 		return nil, "failed", err
 	}
 	return pollTask(db, job.ID, hostIDs, run)
+}
+
+func applyDB(db *gorm.DB, run model.Run, step *model.RunStep, mapped map[string]any) (map[string]any, string, error) {
+	input := decodeObject(run.InputJSON)
+	if taskID, ok := asUint(decodeObject(step.OutputJSON)["task_id"]); ok {
+		return pollDB(db, taskID)
+	}
+	instanceID, ok := asUint(mapped["instance_id"])
+	if !ok {
+		instanceID, ok = asUint(input["instance_id"])
+	}
+	if !ok {
+		return nil, "failed", fmt.Errorf("需要实例")
+	}
+	ticketID, ok := asUint(mapped["ticket_id"])
+	if !ok {
+		ticketID, ok = asUint(input["ticket_id"])
+	}
+	if !ok {
+		return nil, "failed", fmt.Errorf("需要工单")
+	}
+	action := asString(mapped["action"])
+	if action == "" {
+		action = asString(input["action"])
+	}
+	out, err := dbmod.Apply(db, dbmod.Request{
+		InstanceID: instanceID, TicketID: ticketID, Action: action,
+		Database: asString(input["database"]), Account: asString(input["account"]),
+		AccountHost: asString(input["account_host"]), SQL: asString(input["sql"]),
+		Fail: asString(input["task_mock"]) == "failed",
+	}, TaskMock())
+	output := map[string]any{"action": action, "statement": out.Statement}
+	if out.JobID != 0 {
+		output["task_id"] = out.JobID
+	}
+	if err != nil {
+		return output, "failed", err
+	}
+	if out.Status == "issued" {
+		return output, "running", nil
+	}
+	if out.Status == "failed" {
+		return output, "failed", fmt.Errorf("数据库变更没有通过")
+	}
+	return output, "success", nil
+}
+
+func pollDB(db *gorm.DB, taskID uint) (map[string]any, string, error) {
+	var results []model.JobResult
+	if err := db.Where("job_id = ?", taskID).Find(&results).Error; err != nil {
+		return nil, "failed", err
+	}
+	output := map[string]any{"task_id": taskID}
+	open := false
+	failed := false
+	for _, row := range results {
+		switch row.Status {
+		case "pending", "issued":
+			open = true
+		case "failed":
+			failed = true
+			output["summary"] = row.Output
+		case "success":
+			output["summary"] = row.Output
+		}
+	}
+	if open {
+		return output, "running", nil
+	}
+	if failed {
+		return output, "failed", fmt.Errorf("数据库变更没有通过")
+	}
+	return output, "success", nil
 }
 
 func pollTask(db *gorm.DB, taskID uint, hostIDs []uint, run model.Run) (map[string]any, string, error) {
