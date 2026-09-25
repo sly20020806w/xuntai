@@ -19,7 +19,7 @@
 
 | 接口 | 动词 | 资源 | 无节点运维 | 有节点运维 | 平台管理员 |
 |---|---|---|---|---|---|
-| POST /api/ticket/instances/:id/approve | approve | ticket | 403 | 通过（不能批自己的） | 直过 |
+| POST /api/ticket/instances/:id/approve | approve | ticket | 403 | 通过。申请人不能批自己的单，这是工单模块原有规则，不是这次新增 | 直过 |
 | POST /api/ticket/instances/:id/reject | operate | ticket | 403 | 通过 | 直过 |
 | POST /api/ticket/instances/:id/finish | operate | ticket | 403 | 通过 | 直过 |
 | POST /api/playbook/runs | operate | playbook_run | 403 | 通过 | 直过 |
@@ -36,6 +36,16 @@
 | POST /api/cicd/orders/:id/confirm | operate | release_item | 403 | 构建、预发通过；生产阶段 409 | 直过归属，生产仍 409 |
 | POST /api/task/jobs | operate | task_job | 403 | 通过 | 直过 |
 
-剧本没有单独的暂停接口。执行停住来自人工等待或未审批关卡，恢复走继续。任务的暂停、恢复和结果回写仍用原来的节点运维判断，不在上表。
+剧本没有单独的暂停接口。执行停住来自人工等待或未审批关卡，恢复走继续。
 
-提交工单、新建发布单、服务树、告警、数据库这些写接口保持原样。生产镜像仍只允许剧本 `k8s_apply` 修改。同一幂等键的未结束 Run 仍返回 409。工单审批通过后仍只创建 Run，不在审批接口里改镜像。
+提交工单、新建发布单、服务树、告警、数据库这些写接口保持原样。生产镜像写入无条件 409，无调试开关。仓库里没有 `XUNTAI_LEGACY_RELEASE`。生产镜像仍只允许剧本 `k8s_apply` 修改。同一幂等键的未结束 Run 仍返回 409。工单审批通过后仍只创建 Run，不在审批接口里改镜像。申请人不能审批或驳回自己的工单，判断在 `internal/api/ticket/handler.go` 的 `move`，自工单模块接上审批起就有。别人有该节点运维权限时，审批流程不变。
+
+## P1 迭代收口
+
+这次到资源归属为止，下面三项不再开后续事项，继续用原来的节点运维判断（`tree.CanWrite`，平台管理员不直过）：
+
+| 接口 | 现状 |
+|---|---|
+| POST /api/task/jobs/:id/pause | 暂停任务。只有该节点运维能调 |
+| POST /api/task/jobs/:id/resume | 恢复任务。只有该节点运维能调 |
+| POST /api/task/jobs/:id/results | 回写执行结果。只有该节点运维能调 |
