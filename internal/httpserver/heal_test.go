@@ -154,6 +154,14 @@ func TestAlertHeal(t *testing.T) {
 	if err := db.First(&run, started.RunID).Error; err != nil {
 		t.Fatal(err)
 	}
+	if run.ActiveIdem == nil || *run.ActiveIdem == "" {
+		t.Fatal("未结束的 Run 没有占住幂等键")
+	}
+	clone := run
+	clone.ID = 0
+	if err := db.Create(&clone).Error; err == nil {
+		t.Fatal("同一个未结束幂等键写进了第二条 Run")
+	}
 	var input map[string]any
 	if err := json.Unmarshal([]byte(run.InputJSON), &input); err != nil {
 		t.Fatal(err)
@@ -179,6 +187,12 @@ func TestAlertHeal(t *testing.T) {
 	rows = healRows(t, engine, lin, "fingerprint=disk-full")
 	if len(rows) != 1 || rows[0].RunStatus != "cancelled" || rows[0].Detail != "cancelled" {
 		t.Fatalf("取消回写 = %+v", rows)
+	}
+	if err := db.First(&run, started.RunID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if run.ActiveIdem != nil {
+		t.Fatal("终态后幂等槽没有放开")
 	}
 	third := decodeJSON[healHookJSON](t, postJSON(engine, "/api/monitor/alerts/webhook", hookBody("disk-full", order.ID, obj.ID, ruleID, "又满了"), lin))
 	if !third.Started || third.RunID == started.RunID || third.RunStatus != "paused" {

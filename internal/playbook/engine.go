@@ -64,8 +64,9 @@ func Start(db *gorm.DB, code string, userID uint, idemKey string, input map[stri
 	if len(templates) == 0 {
 		return run, fmt.Errorf("剧本没有步骤")
 	}
+	active := fmt.Sprintf("%d:%s", book.ID, idemKey)
 	run = model.Run{
-		PlaybookID: book.ID, IdempotencyKey: idemKey, Status: "pending",
+		PlaybookID: book.ID, IdempotencyKey: idemKey, ActiveIdem: &active, Status: "pending",
 		InputJSON: string(raw), ContextJSON: contextJSON, TriggerUserID: userID,
 		TreeNodeID: nodeID, Version: 1,
 	}
@@ -92,6 +93,12 @@ func Start(db *gorm.DB, code string, userID uint, idemKey string, input map[stri
 		return tx.Create(&steps).Error
 	})
 	if err != nil {
+		if isDuplicate(err) {
+			var winner model.Run
+			if err := db.Where("playbook_id = ? AND idempotency_key = ? AND status IN ?", book.ID, idemKey, activeStatus).First(&winner).Error; err == nil {
+				return winner, conflictError{RunID: winner.ID}
+			}
+		}
 		return run, err
 	}
 	if err := Advance(db, run.ID); err != nil {
@@ -547,7 +554,11 @@ func finishRun(db *gorm.DB, run *model.Run, status string) error {
 }
 
 func setRunStatus(db *gorm.DB, id uint, from []string, to string) error {
-	res := db.Model(&model.Run{}).Where("id = ? AND status IN ?", id, from).Update("status", to)
+	updates := map[string]any{"status": to}
+	if to == "success" || to == "failed" || to == "cancelled" {
+		updates["active_idem"] = gorm.Expr("NULL")
+	}
+	res := db.Model(&model.Run{}).Where("id = ? AND status IN ?", id, from).Updates(updates)
 	if res.Error != nil {
 		return res.Error
 	}
@@ -555,6 +566,14 @@ func setRunStatus(db *gorm.DB, id uint, from []string, to string) error {
 		return ErrTerminal
 	}
 	return nil
+}
+
+func isDuplicate(err error) bool {
+	if err == nil || errors.Is(err, gorm.ErrDuplicatedKey) {
+		return err != nil
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "unique constraint") || strings.Contains(msg, "duplicate entry")
 }
 
 func writeStep(db *gorm.DB, step *model.RunStep, status string, output map[string]any, message string) error {

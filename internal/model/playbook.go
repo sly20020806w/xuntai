@@ -25,10 +25,11 @@ type PlaybookStep struct {
 func (PlaybookStep) TableName() string { return "playbook_step" }
 
 type Run struct {
-	ID               uint   `gorm:"primaryKey"`
-	PlaybookID       uint   `gorm:"not null"`
-	IdempotencyKey   string `gorm:"size:128;not null"`
-	Status           string `gorm:"size:32;not null"`
+	ID               uint    `gorm:"primaryKey"`
+	PlaybookID       uint    `gorm:"not null"`
+	IdempotencyKey   string  `gorm:"size:128;not null"`
+	ActiveIdem       *string `gorm:"size:192;uniqueIndex"`
+	Status           string  `gorm:"size:32;not null"`
 	CurrentStepIndex int
 	InputJSON        string `gorm:"type:text"`
 	ContextJSON      string `gorm:"type:text"`
