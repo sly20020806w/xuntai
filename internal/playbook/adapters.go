@@ -16,9 +16,9 @@ import (
 	"xuntai/internal/tree"
 )
 
-// AgentMock 只在测试或本地打开。生产不设置时，巡检一直等到真实代理回写。
-func AgentMock() bool {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("XUNTAI_AGENT_MOCK"))) {
+// TaskMock 只在测试或本地打开。生产不设置时，巡检一直等到真实代理回写。
+func TaskMock() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("XUNTAI_TASK_MOCK"))) {
 	case "1", "true", "on", "yes":
 		return true
 	default:
@@ -97,7 +97,7 @@ func runTask(db *gorm.DB, userID uint, mapped map[string]any, run model.Run, ste
 }
 
 func pollTask(db *gorm.DB, taskID uint, hostIDs []uint, run model.Run) (map[string]any, string, error) {
-	if AgentMock() {
+	if TaskMock() {
 		if err := writeMockResults(db, taskID, run); err != nil {
 			return nil, "failed", err
 		}
@@ -153,7 +153,7 @@ func pollTask(db *gorm.DB, taskID uint, hostIDs []uint, run model.Run) (map[stri
 func writeMockResults(db *gorm.DB, taskID uint, run model.Run) error {
 	status := "success"
 	output := "模拟巡检通过"
-	if asString(decodeObject(run.InputJSON)["agent_mock"]) == "failed" {
+	if asString(decodeObject(run.InputJSON)["task_mock"]) == "failed" {
 		status = "failed"
 		output = "模拟巡检未通过"
 	}

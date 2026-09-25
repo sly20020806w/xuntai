@@ -30,7 +30,7 @@
 
 | 编码 | 步骤 |
 |---|---|
-| inspect.host.baseline | task_run `run_inspect`，不需要工单。没有代理时结果停在 `issued`，Run 保持 `running`。只有 `XUNTAI_AGENT_MOCK=1` 时，启动或同步会按 `task.Report` 回写：入参 `agent_mock` 为 `failed` 记失败，否则记成功。没开这个变量时忽略 `agent_mock` |
+| inspect.host.baseline | task_run `run_inspect`，不需要工单。没有代理时结果停在 `issued`，Run 保持 `running`。只有 `XUNTAI_TASK_MOCK=1` 时，启动或同步会按 `task.Report` 回写：入参 `task_mock` 为 `failed` 记失败，否则记成功。没开这个变量时忽略 `task_mock` |
 | release.prod.single | ticket_gate `gate`，k8s_apply `deploy`，wait_manual `confirm`。入参里有 `verify_url` 才追加 http_call。只有这一步的 `k8s_apply` 能改生产镜像 |
 | release.prod.rollback | 与单次发布相同，镜像用 `previous_tag`。生产镜像同样只走这里的 `k8s_apply` |
 

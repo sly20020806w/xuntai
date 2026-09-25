@@ -96,7 +96,7 @@ func TestCMDBObjectsKeepHostBinding(t *testing.T) {
 }
 
 func TestSerialPlaybookTicketAndIdempotency(t *testing.T) {
-	t.Setenv("XUNTAI_AGENT_MOCK", "")
+	t.Setenv("XUNTAI_TASK_MOCK", "")
 	engine, db := playEngine(t)
 	lin := loginName(t, engine, "林夏", "secret")
 	xu := loginName(t, engine, "许衡", "secret")
@@ -477,8 +477,8 @@ func TestProductionImageOnlyFromPlaybook(t *testing.T) {
 	}
 }
 
-func TestInspectAgentMock(t *testing.T) {
-	t.Setenv("XUNTAI_AGENT_MOCK", "")
+func TestInspectTaskMock(t *testing.T) {
+	t.Setenv("XUNTAI_TASK_MOCK", "")
 	engine, db := playEngine(t)
 	lin := loginName(t, engine, "林夏", "secret")
 	nodes := decodeNodes(t, getAuth(engine, "/api/tree/nodes", lin))
@@ -496,7 +496,7 @@ func TestInspectAgentMock(t *testing.T) {
 	body := func(key, extra string) string {
 		return fmt.Sprintf(`{"playbook":"inspect.host.baseline","idempotencyKey":"%s","input":{"tree_node_id":%d,"host_ids":%s%s}}`, key, order.ID, hostJSON, extra)
 	}
-	stuck := postJSON(engine, "/api/playbook/runs", body("inspect-mock-off", `,"agent_mock":"failed"`), lin)
+	stuck := postJSON(engine, "/api/playbook/runs", body("inspect-mock-off", `,"task_mock":"failed"`), lin)
 	if stuck.Code != http.StatusOK {
 		t.Fatalf("关闭模拟 = %d %s", stuck.Code, stuck.Body.String())
 	}
@@ -518,8 +518,8 @@ func TestInspectAgentMock(t *testing.T) {
 		t.Fatal("没有停在已下发")
 	}
 
-	t.Setenv("XUNTAI_AGENT_MOCK", "1")
-	if !playbook.AgentMock() {
+	t.Setenv("XUNTAI_TASK_MOCK", "1")
+	if !playbook.TaskMock() {
 		t.Fatal("模拟开关没有打开")
 	}
 	synced := postJSON(engine, fmt.Sprintf("/api/playbook/runs/%d/sync", waiting.ID), "", lin)
