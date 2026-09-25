@@ -24,6 +24,7 @@ func Models() []any {
 		&SendGroup{},
 		&AlertRule{},
 		&AlertEvent{},
+		&AlertAction{},
 		&Cluster{},
 		&Project{},
 		&App{},

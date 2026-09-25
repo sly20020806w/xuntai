@@ -49,6 +49,7 @@ func TestMigrateCreatesModuleTables(t *testing.T) {
 		"k8s_instances",
 		"k8s_projects",
 		"model",
+		"monitor_alert_actions",
 		"monitor_alert_events",
 		"monitor_alert_rules",
 		"monitor_alertmanager_clusters",

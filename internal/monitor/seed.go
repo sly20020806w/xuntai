@@ -15,8 +15,16 @@ func APICatalog() []model.API {
 		{Method: "GET", Path: "/api/monitor/jobs"},
 		{Method: "POST", Path: "/api/monitor/jobs"},
 		{Method: "GET", Path: "/api/monitor/send-groups"},
+		{Method: "POST", Path: "/api/monitor/send-groups"},
+		{Method: "PUT", Path: "/api/monitor/send-groups/:id"},
 		{Method: "GET", Path: "/api/monitor/rules"},
 		{Method: "POST", Path: "/api/monitor/rules"},
+		{Method: "PUT", Path: "/api/monitor/rules/:id"},
+		{Method: "POST", Path: "/api/monitor/alerts/webhook"},
+		{Method: "POST", Path: "/api/monitor/alerts/assign"},
+		{Method: "POST", Path: "/api/monitor/alerts/mute"},
+		{Method: "POST", Path: "/api/monitor/alerts/escalate"},
+		{Method: "GET", Path: "/api/monitor/alerts/actions"},
 	}
 }
 
@@ -32,7 +40,10 @@ func Seed(db *gorm.DB) (bool, error) {
 		return false, err
 	}
 	if count > 0 {
-		return false, bindRuleNodes(db)
+		if err := bindRuleNodes(db); err != nil {
+			return false, err
+		}
+		return false, bindSendGroupNodes(db)
 	}
 	err := db.Transaction(func(tx *gorm.DB) error {
 		basePool := model.ScrapePool{Name: "基础采集", RemoteWrite: "远端存储", SupportAlert: true}
@@ -48,6 +59,10 @@ func Seed(db *gorm.DB) (bool, error) {
 			return err
 		}
 		order, err := nodeID(tx, "订单")
+		if err != nil {
+			return err
+		}
+		trade, err := nodeID(tx, "交易")
 		if err != nil {
 			return err
 		}
@@ -84,9 +99,9 @@ func Seed(db *gorm.DB) (bool, error) {
 			dutyID[duty.Name] = duty.ID
 		}
 		groups := []model.SendGroup{
-			{Name: "交易发送", DutyGroupID: dutyID["交易值班"], ClusterID: cluster.ID},
-			{Name: "基础架构发送", DutyGroupID: dutyID["基础架构值班"], ClusterID: cluster.ID},
-			{Name: "可观测发送", DutyGroupID: dutyID["可观测值班"], ClusterID: cluster.ID},
+			{Name: "交易发送", DutyGroupID: dutyID["交易值班"], ClusterID: cluster.ID, TreeNodeID: trade},
+			{Name: "基础架构发送", DutyGroupID: dutyID["基础架构值班"], ClusterID: cluster.ID, TreeNodeID: edge},
+			{Name: "可观测发送", DutyGroupID: dutyID["可观测值班"], ClusterID: cluster.ID, TreeNodeID: observe},
 		}
 		if err := tx.Create(&groups).Error; err != nil {
 			return err
@@ -135,6 +150,30 @@ func bindRuleNodes(db *gorm.DB) error {
 			continue
 		}
 		if err := db.Model(&model.AlertRule{}).Where("name = ? AND (tree_node_id = 0 OR tree_node_id IS NULL)", pair.rule).Update("tree_node_id", node.ID).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func bindSendGroupNodes(db *gorm.DB) error {
+	pairs := []struct {
+		group string
+		node  string
+	}{
+		{"交易发送", "交易"},
+		{"基础架构发送", "入口"},
+		{"可观测发送", "可观测"},
+	}
+	for _, pair := range pairs {
+		var node model.Node
+		if err := db.Where("name = ?", pair.node).Limit(1).Find(&node).Error; err != nil {
+			return err
+		}
+		if node.ID == 0 {
+			continue
+		}
+		if err := db.Model(&model.SendGroup{}).Where("name = ? AND (tree_node_id = 0 OR tree_node_id IS NULL)", pair.group).Update("tree_node_id", node.ID).Error; err != nil {
 			return err
 		}
 	}

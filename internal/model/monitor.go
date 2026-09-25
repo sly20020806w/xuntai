@@ -44,6 +44,9 @@ type SendGroup struct {
 	Name        string `gorm:"size:128;not null"`
 	DutyGroupID uint
 	ClusterID   uint
+	TreeNodeID  uint
+	AppID       uint
+	ObjectID    uint
 }
 
 func (SendGroup) TableName() string { return "monitor_send_groups" }
@@ -56,6 +59,8 @@ type AlertRule struct {
 	PoolID      uint   `gorm:"not null"`
 	SendGroupID uint   `gorm:"not null"`
 	TreeNodeID  uint
+	AppID       uint
+	ObjectID    uint
 }
 
 func (AlertRule) TableName() string { return "monitor_alert_rules" }
@@ -68,3 +73,16 @@ type AlertEvent struct {
 }
 
 func (AlertEvent) TableName() string { return "monitor_alert_events" }
+
+// AlertAction 记下对某条告警的认领、屏蔽或升级。
+type AlertAction struct {
+	ID          uint   `gorm:"primaryKey"`
+	Fingerprint string `gorm:"size:128;index"`
+	TreeNodeID  uint
+	ObjectID    uint
+	Action      string `gorm:"size:16"`
+	ActorID     uint
+	OwnerID     uint
+}
+
+func (AlertAction) TableName() string { return "monitor_alert_actions" }
