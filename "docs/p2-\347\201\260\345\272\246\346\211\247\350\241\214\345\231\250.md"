@@ -1,0 +1,33 @@
+# 灰度执行器
+
+`k8s_apply` 按发布项对象上的 `executor` 分派。`platform`（或留空）仍是一次写成完整镜像，后面的分批仍是人工确认，不切流量。`rollouts` 走灰度。其它名字仍是 400「执行器还没有接上」，不会悄悄退回 `platform`。
+
+策略只从发布项读。Run 入参里的 `executor`、`weights`、`strategy` 不生效。
+
+## 发布项上的策略
+
+| 字段 | 含义 |
+|---|---|
+| `strategy` | `canary` 用百分比序列。`batch` 且没写百分比时，按批次均分到 100 |
+| `weights` | 金丝雀百分比，例如 `[10, 50, 100]`。最后一档必须是 100。没写时 canary 默认 10、50、100 |
+| `stableSeconds` | 每个阶段让 Rollout 暂停的秒数。0 表示停住等人 |
+| `failureThreshold` | 失败几次后判定这个阶段没通过。默认 1 |
+| `autoRollback` | 失败后把实例镜像写回这个灰度开始前的旧镜像 |
+
+每个百分比是一条 `k8s_apply` 步骤，步骤名是 `w10` 这种。进入该步就把流量推到这个百分比，然后 Run 停在 `paused`。继续仍用原来的 `stepId` 和 `version`。到 100 或回滚时才把实例镜像写成目标标签。不到 100 时，实例镜像保持旧版本。
+
+`GET /api/playbook/runs` 和详情里每个步骤都有 `id`、`key`、`status`、`output.weight`。
+
+## 回滚
+
+失败时如果开了 `autoRollback`，同一次继续把镜像写回旧版本，Run 变为失败。没有开时，阶段失败，镜像保持当前值，要回旧标签就再走 `release.prod.rollback`。回滚剧本把 `previous_tag` 一次放回 100%，步骤名是 `abort`。没有别的改版本接口。
+
+## 模拟
+
+`XUNTAI_ROLLOUTS_MOCK=1`（也接受 `true`、`on`、`yes`）时，用内存状态机从 0 走到各百分比，再在 100 停住。默认关闭。生产不要设置。打开时进程日志会写「灰度由本地状态机推进，生产环境不要打开」。
+
+## 真实集群
+
+模拟关闭时，适配层按 Argo Rollouts 的 CRD 调用 `PUT/POST /apis/argoproj.io/v1alpha1/namespaces/default/rollouts/{发布项名}`，请求体是 `setWeight` 和 `pause`。集群要用发布项所在集群记录里的 kubeconfig。没有 kubeconfig 就失败，不会改走模拟。
+
+这条路径没有在真实集群验收，需要生产环境验证。本机没有集群，测试只检查请求体和「没有 kubeconfig 时失败且不改镜像」。没有引入 Argo 的代码库，也没有 client-go。OpenKruise 和蓝绿不在这里。

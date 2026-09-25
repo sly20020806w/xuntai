@@ -698,6 +698,213 @@ func TestReleaseBatchWaits(t *testing.T) {
 	}
 }
 
+func TestRolloutCanaryMock(t *testing.T) {
+	t.Setenv("XUNTAI_ROLLOUTS_MOCK", "1")
+	engine, _ := playEngine(t)
+	lin := loginName(t, engine, "林夏", "secret")
+	chen := loginName(t, engine, "陈舟", "secret")
+	nodes := decodeNodes(t, getAuth(engine, "/api/tree/nodes", lin))
+	order := mustNode(t, nodes, "订单")
+	itemID, clusterID := releaseIDs(t, engine, lin)
+	releaseTpl, rollbackTpl := releaseTemplates(t, engine, chen)
+	if rec := putJSON(engine, fmt.Sprintf("/api/cicd/items/%d", itemID), `{"executor":"rollouts","strategy":"canary","weights":[10,50],"stableSeconds":5}`, lin); rec.Code != http.StatusBadRequest {
+		t.Fatalf("百分比未到 100 = %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := putJSON(engine, fmt.Sprintf("/api/cicd/items/%d", itemID), `{"executor":"rollouts","strategy":"canary","weights":[10,50,100],"stableSeconds":5,"failureThreshold":1,"autoRollback":false}`, lin); rec.Code != http.StatusOK {
+		t.Fatalf("写入灰度 = %d %s", rec.Code, rec.Body.String())
+	}
+	before := imageOf(t, engine, lin, "order-api", "生产")
+	payload := fmt.Sprintf(`{"release_item_id":%d,"image_tag":"1.9.5","clusters":[%d],"executor":"platform","weights":[1],"strategy":"manual"}`, itemID, clusterID)
+	run := approveRelease(t, engine, chen, lin, releaseTpl, order.ID, "灰度发布", payload)
+	if run.Status != "paused" || imageOf(t, engine, lin, "order-api", "生产") != before {
+		t.Fatalf("第一阶段 = %s %s %+v", run.Status, imageOf(t, engine, lin, "order-api", "生产"), run.Steps)
+	}
+	if !sawStep(run, "w10", "waiting") || sawStep(run, "w1", "") || sawStep(run, "confirm", "") {
+		t.Fatalf("步骤没按发布项展开 %+v", run.Steps)
+	}
+	if stepOut(run, "w10")["mode"] != "mock" || stepOut(run, "w10")["weight"] != float64(10) || stepOut(run, "w10")["from"] != float64(0) || stepOut(run, "w10")["stable_seconds"] != float64(5) {
+		t.Fatalf("第一阶段输出 = %+v", stepOut(run, "w10"))
+	}
+	dup := postJSON(engine, "/api/playbook/runs", fmt.Sprintf(`{"playbook":"release.prod.single","idempotencyKey":"%s","input":{"ticket_id":1,"tree_node_id":%d,"release_item_id":%d,"image_tag":"1.9.5","clusters":[%d]}}`, runKey(t, engine, lin, run.ID), order.ID, itemID, clusterID), lin)
+	if dup.Code != http.StatusConflict {
+		t.Fatalf("未结束再次发布 = %d %s", dup.Code, dup.Body.String())
+	}
+	run = continueWaiting(t, engine, lin, run)
+	if run.Status != "paused" || !sawStep(run, "w50", "waiting") || imageOf(t, engine, lin, "order-api", "生产") != before {
+		t.Fatalf("第二阶段 = %s %+v", run.Status, run.Steps)
+	}
+	run = continueWaiting(t, engine, lin, run)
+	if run.Status != "paused" || !sawStep(run, "w100", "waiting") || imageOf(t, engine, lin, "order-api", "生产") != "order-api:1.9.5" {
+		t.Fatalf("全量 = %s %s %+v", run.Status, imageOf(t, engine, lin, "order-api", "生产"), run.Steps)
+	}
+	run = continueWaiting(t, engine, lin, run)
+	if run.Status != "success" {
+		t.Fatalf("灰度结束 = %s %+v", run.Status, run.Steps)
+	}
+
+	back := approveRelease(t, engine, chen, lin, rollbackTpl, order.ID, "灰度回滚", fmt.Sprintf(`{"release_item_id":%d,"previous_tag":"1.8.3","clusters":[%d],"executor":"platform"}`, itemID, clusterID))
+	if back.Status != "paused" || !sawStep(back, "abort", "waiting") || imageOf(t, engine, lin, "order-api", "生产") != "order-api:1.8.3" {
+		t.Fatalf("回滚 = %s %s %+v", back.Status, imageOf(t, engine, lin, "order-api", "生产"), back.Steps)
+	}
+}
+
+func TestRolloutAutoRollbackAndLivePath(t *testing.T) {
+	t.Setenv("XUNTAI_ROLLOUTS_MOCK", "1")
+	engine, _ := playEngine(t)
+	lin := loginName(t, engine, "林夏", "secret")
+	chen := loginName(t, engine, "陈舟", "secret")
+	nodes := decodeNodes(t, getAuth(engine, "/api/tree/nodes", lin))
+	order := mustNode(t, nodes, "订单")
+	itemID, clusterID := releaseIDs(t, engine, lin)
+	releaseTpl, _ := releaseTemplates(t, engine, chen)
+	if rec := putJSON(engine, fmt.Sprintf("/api/cicd/items/%d", itemID), `{"executor":"rollouts","strategy":"canary","weights":[10,100],"autoRollback":true}`, lin); rec.Code != http.StatusOK {
+		t.Fatalf("自动回滚策略 = %d %s", rec.Code, rec.Body.String())
+	}
+	before := imageOf(t, engine, lin, "order-api", "生产")
+	run := approveRelease(t, engine, chen, lin, releaseTpl, order.ID, "失败回滚", fmt.Sprintf(`{"release_item_id":%d,"image_tag":"1.9.6","clusters":[%d]}`, itemID, clusterID))
+	run = continueWaiting(t, engine, lin, run)
+	if imageOf(t, engine, lin, "order-api", "生产") != "order-api:1.9.6" || !sawStep(run, "w100", "waiting") {
+		t.Fatalf("全量等待 = %s %s %+v", run.Status, imageOf(t, engine, lin, "order-api", "生产"), run.Steps)
+	}
+	failed := postJSON(engine, fmt.Sprintf("/api/playbook/runs/%d/continue", run.ID), fmt.Sprintf(`{"stepId":%d,"version":%d,"continueInput":{"failed":true}}`, waitingID(run), run.Version), lin)
+	if failed.Code != http.StatusOK {
+		t.Fatalf("失败继续 = %d %s", failed.Code, failed.Body.String())
+	}
+	done := decodeRun(t, failed)
+	if done.Status != "failed" || imageOf(t, engine, lin, "order-api", "生产") != before {
+		t.Fatalf("自动回滚 = %s %s %+v", done.Status, imageOf(t, engine, lin, "order-api", "生产"), done.Steps)
+	}
+
+	t.Setenv("XUNTAI_ROLLOUTS_MOCK", "")
+	liveEngine, _ := playEngine(t)
+	lin = loginName(t, liveEngine, "林夏", "secret")
+	chen = loginName(t, liveEngine, "陈舟", "secret")
+	nodes = decodeNodes(t, getAuth(liveEngine, "/api/tree/nodes", lin))
+	order = mustNode(t, nodes, "订单")
+	itemID, clusterID = releaseIDs(t, liveEngine, lin)
+	releaseTpl, _ = releaseTemplates(t, liveEngine, chen)
+	if rec := putJSON(liveEngine, fmt.Sprintf("/api/cicd/items/%d", itemID), `{"executor":"rollouts","weights":[10,100]}`, lin); rec.Code != http.StatusOK {
+		t.Fatalf("真实路径策略 = %d %s", rec.Code, rec.Body.String())
+	}
+	origin := imageOf(t, liveEngine, lin, "order-api", "生产")
+	live := approveRelease(t, liveEngine, chen, lin, releaseTpl, order.ID, "未模拟", fmt.Sprintf(`{"release_item_id":%d,"image_tag":"1.9.7","clusters":[%d]}`, itemID, clusterID))
+	if live.Status != "failed" || imageOf(t, liveEngine, lin, "order-api", "生产") != origin {
+		t.Fatalf("未模拟 = %s %s %+v", live.Status, imageOf(t, liveEngine, lin, "order-api", "生产"), live.Steps)
+	}
+	if !strings.Contains(stepErr(live, "w10"), "kubeconfig") {
+		t.Fatalf("真实路径错误 = %+v", live.Steps)
+	}
+}
+
+func releaseIDs(t *testing.T, engine http.Handler, token string) (uint, uint) {
+	t.Helper()
+	items := decodeJSON[[]namedID](t, getAuth(engine, "/api/cicd/items", token))
+	var itemID uint
+	for _, item := range items {
+		if item.Name == "order-api" {
+			itemID = item.ID
+		}
+	}
+	clusters := decodeJSON[[]struct {
+		ID  uint   `json:"id"`
+		Env string `json:"env"`
+	}](t, getAuth(engine, "/api/k8s/clusters", token))
+	var clusterID uint
+	for _, cluster := range clusters {
+		if cluster.Env == "生产" {
+			clusterID = cluster.ID
+		}
+	}
+	return itemID, clusterID
+}
+
+func releaseTemplates(t *testing.T, engine http.Handler, token string) (uint, uint) {
+	t.Helper()
+	templates := decodeJSON[[]namedID](t, getAuth(engine, "/api/ticket/templates", token))
+	var releaseTpl, rollbackTpl uint
+	for _, tpl := range templates {
+		if tpl.Name == "生产发布" {
+			releaseTpl = tpl.ID
+		}
+		if tpl.Name == "生产回滚" {
+			rollbackTpl = tpl.ID
+		}
+	}
+	return releaseTpl, rollbackTpl
+}
+
+func approveRelease(t *testing.T, engine http.Handler, chen, lin string, tpl, nodeID uint, title, payload string) runView {
+	t.Helper()
+	created := postJSON(engine, "/api/ticket/instances", fmt.Sprintf(`{"templateId":%d,"treeNodeId":%d,"title":%q,"payload":%q}`, tpl, nodeID, title, payload), chen)
+	if created.Code != http.StatusOK {
+		t.Fatalf("提单 = %d %s", created.Code, created.Body.String())
+	}
+	ticketID := decodeJSON[struct {
+		ID uint `json:"id"`
+	}](t, created).ID
+	approved := postJSON(engine, fmt.Sprintf("/api/ticket/instances/%d/approve", ticketID), "", lin)
+	if approved.Code != http.StatusOK {
+		t.Fatalf("审批 = %d %s", approved.Code, approved.Body.String())
+	}
+	runID := decodeJSON[struct {
+		RunID uint `json:"runId"`
+	}](t, approved).RunID
+	return decodeRun(t, getAuth(engine, fmt.Sprintf("/api/playbook/runs/%d", runID), lin))
+}
+
+func continueWaiting(t *testing.T, engine http.Handler, token string, run runView) runView {
+	t.Helper()
+	rec := postJSON(engine, fmt.Sprintf("/api/playbook/runs/%d/continue", run.ID), fmt.Sprintf(`{"stepId":%d,"version":%d}`, waitingID(run), run.Version), token)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("继续 = %d %s", rec.Code, rec.Body.String())
+	}
+	return decodeRun(t, rec)
+}
+
+func waitingID(run runView) uint {
+	for _, step := range run.Steps {
+		if step.Status == "waiting" {
+			return step.ID
+		}
+	}
+	return 0
+}
+
+func sawStep(run runView, key, status string) bool {
+	for _, step := range run.Steps {
+		if step.Key == key && (status == "" || step.Status == status) {
+			return true
+		}
+	}
+	return false
+}
+
+func stepOut(run runView, key string) map[string]any {
+	for _, step := range run.Steps {
+		if step.Key == key {
+			return step.Output
+		}
+	}
+	return nil
+}
+
+func stepErr(run runView, key string) string {
+	for _, step := range run.Steps {
+		if step.Key == key {
+			return step.Error
+		}
+	}
+	return ""
+}
+
+func runKey(t *testing.T, engine http.Handler, token string, id uint) string {
+	t.Helper()
+	view := decodeJSON[struct {
+		Key string `json:"idempotencyKey"`
+	}](t, getAuth(engine, fmt.Sprintf("/api/playbook/runs/%d", id), token))
+	return view.Key
+}
+
 func playEngine(t *testing.T) (*gin.Engine, *gorm.DB) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)

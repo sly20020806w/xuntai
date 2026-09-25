@@ -92,16 +92,20 @@ func (h handler) createItem(c *gin.Context) {
 		return
 	}
 	var body struct {
-		Name       string   `json:"name"`
-		TreeNodeID uint     `json:"treeNodeId"`
-		Repo       string   `json:"repo"`
-		ImageName  string   `json:"imageName"`
-		Stages     []string `json:"stages"`
-		Clusters   []uint   `json:"clusters"`
-		Batches    []string `json:"batches"`
-		Strategy   string   `json:"strategy"`
-		VerifyURL  string   `json:"verifyUrl"`
-		Executor   string   `json:"executor"`
+		Name             string   `json:"name"`
+		TreeNodeID       uint     `json:"treeNodeId"`
+		Repo             string   `json:"repo"`
+		ImageName        string   `json:"imageName"`
+		Stages           []string `json:"stages"`
+		Clusters         []uint   `json:"clusters"`
+		Batches          []string `json:"batches"`
+		Strategy         string   `json:"strategy"`
+		VerifyURL        string   `json:"verifyUrl"`
+		Executor         string   `json:"executor"`
+		Weights          []int    `json:"weights"`
+		StableSeconds    int      `json:"stableSeconds"`
+		FailureThreshold int      `json:"failureThreshold"`
+		AutoRollback     bool     `json:"autoRollback"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil || strings.TrimSpace(body.Name) == "" || body.TreeNodeID == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "需要发布项名和节点"})
@@ -126,6 +130,8 @@ func (h handler) createItem(c *gin.Context) {
 	attr := cicdcore.Attr{
 		Stages: body.Stages, Clusters: body.Clusters, Batches: body.Batches,
 		Strategy: body.Strategy, VerifyURL: body.VerifyURL, Executor: body.Executor,
+		Weights: body.Weights, StableSeconds: body.StableSeconds,
+		FailureThreshold: body.FailureThreshold, AutoRollback: body.AutoRollback,
 	}
 	if err := cicdcore.Validate(attr); err != nil {
 		h.writeErr(c, err)
@@ -152,12 +158,16 @@ func (h handler) updateItem(c *gin.Context) {
 		return
 	}
 	var body struct {
-		Stages    *[]string `json:"stages"`
-		Clusters  *[]uint   `json:"clusters"`
-		Batches   *[]string `json:"batches"`
-		Strategy  *string   `json:"strategy"`
-		VerifyURL *string   `json:"verifyUrl"`
-		Executor  *string   `json:"executor"`
+		Stages           *[]string `json:"stages"`
+		Clusters         *[]uint   `json:"clusters"`
+		Batches          *[]string `json:"batches"`
+		Strategy         *string   `json:"strategy"`
+		VerifyURL        *string   `json:"verifyUrl"`
+		Executor         *string   `json:"executor"`
+		Weights          *[]int    `json:"weights"`
+		StableSeconds    *int      `json:"stableSeconds"`
+		FailureThreshold *int      `json:"failureThreshold"`
+		AutoRollback     *bool     `json:"autoRollback"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "发布策略没有读出来"})
@@ -185,6 +195,18 @@ func (h handler) updateItem(c *gin.Context) {
 	}
 	if body.Executor != nil {
 		attr.Executor = *body.Executor
+	}
+	if body.Weights != nil {
+		attr.Weights = *body.Weights
+	}
+	if body.StableSeconds != nil {
+		attr.StableSeconds = *body.StableSeconds
+	}
+	if body.FailureThreshold != nil {
+		attr.FailureThreshold = *body.FailureThreshold
+	}
+	if body.AutoRollback != nil {
+		attr.AutoRollback = *body.AutoRollback
 	}
 	if err := cicdcore.Save(h.deps.DB, &row, attr); err != nil {
 		h.writeErr(c, err)
@@ -350,10 +372,12 @@ func (h handler) nodeCovers(root, target uint) bool {
 }
 
 func (h handler) itemJSON(row model.DeployItem, names map[uint]string) gin.H {
+	attr, _ := cicdcore.Load(h.deps.DB, row.ID)
 	return gin.H{
 		"id": row.ID, "name": row.Name, "nodeId": row.TreeNodeID,
 		"nodeName": names[row.TreeNodeID], "repo": row.Repo, "imageName": row.ImageName,
 		"objectId": row.ObjectID, "objectName": row.Name,
+		"executor": cicdcore.ExecutorName(attr), "strategy": attr.Strategy,
 	}
 }
 
@@ -365,7 +389,11 @@ func (h handler) itemDetail(row model.DeployItem) gin.H {
 	body["batches"] = attr.Batches
 	body["strategy"] = attr.Strategy
 	body["verifyUrl"] = attr.VerifyURL
-	body["executor"] = attr.Executor
+	body["executor"] = cicdcore.ExecutorName(attr)
+	body["weights"] = attr.Weights
+	body["stableSeconds"] = attr.StableSeconds
+	body["failureThreshold"] = attr.FailureThreshold
+	body["autoRollback"] = attr.AutoRollback
 	return body
 }
 
@@ -424,6 +452,8 @@ func (h handler) writeErr(c *gin.Context, err error) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "没有找到发布需要的记录"})
 	case errors.Is(err, cicdcore.ErrExecutor):
 		c.JSON(http.StatusBadRequest, gin.H{"error": "执行器还没有接上"})
+	case errors.Is(err, cicdcore.ErrStrategy):
+		c.JSON(http.StatusBadRequest, gin.H{"error": "灰度百分比要从 1 到 100，并且以 100 结束"})
 	case errors.Is(err, cicdcore.ErrBatch):
 		c.JSON(http.StatusBadRequest, gin.H{"error": "批次名称不对"})
 	default:

@@ -114,6 +114,9 @@ func main() {
 	if playbook.TaskMock() {
 		log.Printf("巡检结果由本地模拟回写，生产环境不要打开")
 	}
+	if config.RolloutsMock() {
+		log.Printf("灰度由本地状态机推进，生产环境不要打开")
+	}
 	if err := base.ApplyPassword(db, cfg.AdminPassword); err != nil {
 		log.Fatal(err)
 	}

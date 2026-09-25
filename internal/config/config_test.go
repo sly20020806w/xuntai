@@ -4,6 +4,21 @@ import (
 	"testing"
 )
 
+func TestRolloutsMockStaysOff(t *testing.T) {
+	t.Setenv("XUNTAI_ROLLOUTS_MOCK", "")
+	if RolloutsMock() {
+		t.Fatal("未设置时不应该模拟灰度")
+	}
+	t.Setenv("XUNTAI_ROLLOUTS_MOCK", "off")
+	if RolloutsMock() {
+		t.Fatal("关闭时不应该模拟灰度")
+	}
+	t.Setenv("XUNTAI_ROLLOUTS_MOCK", "1")
+	if !RolloutsMock() {
+		t.Fatal("打开后应该模拟灰度")
+	}
+}
+
 func TestLoadRequiresJWTSecret(t *testing.T) {
 	t.Setenv("XUNTAI_JWT_SECRET", "")
 	if _, err := Load(); err == nil {

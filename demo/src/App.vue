@@ -1287,7 +1287,7 @@ if (keptToken) {
         <template v-else-if="currentId === 'cicd'">
           <form v-if="session" class="login" @submit.prevent="createRelease">
             <select v-model="releaseItemId" aria-label="发布项">
-              <option v-for="item in shownItems" :key="item.id" :value="String(item.id)">{{ item.name }}</option>
+              <option v-for="item in shownItems" :key="item.id" :value="String(item.id)">{{ item.name }}{{ item.executor && item.executor !== "platform" ? " · " + item.executor : "" }}</option>
             </select>
             <select v-model="releaseEnv" aria-label="环境">
               <option value="开发">开发</option>

@@ -22,7 +22,7 @@
 
 ## 执行器边界
 
-本轮没有接入 Argo Rollouts 或 OpenKruise。`executor` 必须留空，写入组件名会拒绝，错误是「执行器还没有接上」。`strategy` 只记在发布项上，例如 `manual` 或 `canary`，平台不按这个字段去调控制器。灰度流量发布不在本轮，后续要做时再接 Argo Rollouts。
+`executor` 只接受空、`platform` 和 `rollouts`。其它组件名仍是 400「执行器还没有接上」。`platform` 仍是分批人工确认，不是切流量。`rollouts` 的灰度说明在 `docs/p2-灰度执行器.md`。OpenKruise 没有接。
 
 ## 权限
 

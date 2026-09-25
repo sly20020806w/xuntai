@@ -81,11 +81,12 @@ func Start(db *gorm.DB, code string, userID uint, idemKey string, input map[stri
 		}
 		if code == "release.prod.single" || code == "release.prod.rollback" {
 			itemID, _ := asUint(input["release_item_id"])
-			batches, verify, err := cicd.Plan(tx, itemID)
+			spec, err := cicd.SpecFor(tx, itemID)
 			if err != nil {
 				return err
 			}
-			steps = materialize(steps, batches, verify)
+			spec.Rollback = code == "release.prod.rollback"
+			steps = materialize(steps, spec)
 		}
 		return tx.Create(&steps).Error
 	})
@@ -197,7 +198,7 @@ func dispatch(db *gorm.DB, run *model.Run, step *model.RunStep, depth int) error
 	case "task_run":
 		output, status, stepErr = runTask(db, run.TriggerUserID, mapped, *run, step)
 	case "k8s_apply":
-		output, status, stepErr = applyRelease(db, run.TriggerUserID, mapped)
+		output, status, stepErr = applyRelease(db, run, mapped)
 	case "http_call":
 		output, status, stepErr = callHTTP(mapped)
 	case "wait_manual":
@@ -259,26 +260,15 @@ func Continue(db *gorm.DB, runID, stepID uint, version int, userID uint, extra m
 		return ErrVersion
 	}
 	switch step.Kind {
+	case "k8s_apply":
+		if flagged(extra) {
+			return failCanary(db, &run, &step)
+		}
+		if err := markContinued(db, &run, &step, userID, extra); err != nil {
+			return err
+		}
 	case "wait_manual":
-		context := decodeObject(run.ContextJSON)
-		for key, value := range extra {
-			context[key] = value
-		}
-		raw, err := json.Marshal(context)
-		if err != nil {
-			return err
-		}
-		if err := db.Model(&model.Run{}).Where("id = ?", run.ID).Update("context_json", string(raw)).Error; err != nil {
-			return err
-		}
-		var user model.User
-		_ = db.First(&user, userID).Error
-		output := map[string]any{
-			"continued_by": user.Name,
-			"continued_at": time.Now().UTC().Format(time.RFC3339),
-			"form":         extra,
-		}
-		if err := writeStep(db, &step, "success", output, ""); err != nil {
+		if err := markContinued(db, &run, &step, userID, extra); err != nil {
 			return err
 		}
 	case "ticket_gate":
@@ -384,7 +374,12 @@ func requireInput(code string, input map[string]any) error {
 	return nil
 }
 
-func materialize(steps []model.RunStep, batches []string, verify string) []model.RunStep {
+func materialize(steps []model.RunStep, spec cicd.Spec) []model.RunStep {
+	if spec.Executor == "rollouts" {
+		return rolloutSteps(steps, spec)
+	}
+	batches := spec.Batches
+	verify := spec.Verify
 	out := make([]model.RunStep, 0, len(steps)+len(batches)+1)
 	for _, step := range steps {
 		if step.Kind == "wait_manual" && len(batches) >= 2 {
@@ -416,6 +411,89 @@ func materialize(steps []model.RunStep, batches []string, verify string) []model
 		out[i].Seq = i + 1
 	}
 	return out
+}
+
+func rolloutSteps(steps []model.RunStep, spec cicd.Spec) []model.RunStep {
+	out := make([]model.RunStep, 0, len(steps)+4)
+	runID := uint(0)
+	if len(steps) > 0 {
+		runID = steps[0].RunID
+	}
+	for _, step := range steps {
+		if step.Kind == "k8s_apply" || step.Kind == "wait_manual" {
+			continue
+		}
+		out = append(out, step)
+	}
+	if spec.Rollback {
+		raw, _ := json.Marshal(map[string]any{"abort": true})
+		out = append(out, model.RunStep{
+			RunID: runID, StepKey: "abort", Kind: "k8s_apply",
+			Status: "pending", OnError: "stop", InputJSON: string(raw), OutputJSON: "{}",
+		})
+	} else {
+		seen := map[string]int{}
+		for _, weight := range spec.Stages() {
+			base := fmt.Sprintf("w%d", weight)
+			seen[base]++
+			key := base
+			if seen[base] > 1 {
+				key = fmt.Sprintf("%s_%d", base, seen[base])
+			}
+			raw, _ := json.Marshal(map[string]any{"weight": weight})
+			out = append(out, model.RunStep{
+				RunID: runID, StepKey: key, Kind: "k8s_apply",
+				Status: "pending", OnError: "stop", InputJSON: string(raw), OutputJSON: "{}",
+			})
+		}
+	}
+	if spec.Verify != "" {
+		raw, _ := json.Marshal(map[string]string{"url": spec.Verify})
+		out = append(out, model.RunStep{
+			RunID: runID, StepKey: "verify", Kind: "http_call",
+			Status: "pending", OnError: "stop", InputJSON: string(raw), OutputJSON: "{}",
+		})
+	}
+	for i := range out {
+		out[i].Seq = i + 1
+	}
+	return out
+}
+
+func markContinued(db *gorm.DB, run *model.Run, step *model.RunStep, userID uint, extra map[string]any) error {
+	context := decodeObject(run.ContextJSON)
+	for key, value := range extra {
+		context[key] = value
+	}
+	raw, err := json.Marshal(context)
+	if err != nil {
+		return err
+	}
+	if err := db.Model(run).Update("context_json", string(raw)).Error; err != nil {
+		return err
+	}
+	var user model.User
+	_ = db.First(&user, userID).Error
+	output := map[string]any{
+		"continued_by": user.Name,
+		"continued_at": time.Now().UTC().Format(time.RFC3339),
+		"form":         extra,
+	}
+	return writeStep(db, step, "success", output, "")
+}
+
+func flagged(extra map[string]any) bool {
+	if extra == nil {
+		return false
+	}
+	switch value := extra["failed"].(type) {
+	case bool:
+		return value
+	case string:
+		return value == "1" || value == "true"
+	default:
+		return false
+	}
 }
 
 func bump(db *gorm.DB, run *model.Run, total, depth int) error {

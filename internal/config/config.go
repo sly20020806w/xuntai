@@ -39,6 +39,16 @@ func Load() (Config, error) {
 	}, nil
 }
 
+// RolloutsMock 只在明确打开时用内存状态机模拟灰度。生产默认关闭。
+func RolloutsMock() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("XUNTAI_ROLLOUTS_MOCK"))) {
+	case "1", "true", "on", "yes":
+		return true
+	default:
+		return false
+	}
+}
+
 func scopeFilter() bool {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("XUNTAI_SCOPE_FILTER"))) {
 	case "0", "false", "off":

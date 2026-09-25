@@ -1,6 +1,7 @@
 package playbook
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -12,7 +13,10 @@ import (
 	"gorm.io/gorm"
 
 	"xuntai/internal/access"
+	"xuntai/internal/cicd"
+	"xuntai/internal/config"
 	"xuntai/internal/model"
+	"xuntai/internal/rollouts"
 	"xuntai/internal/task"
 )
 
@@ -174,7 +178,20 @@ func writeMockResults(db *gorm.DB, taskID uint, run model.Run) error {
 	return fmt.Errorf("模拟回写没有收完")
 }
 
-func applyRelease(db *gorm.DB, userID uint, mapped map[string]any) (map[string]any, string, error) {
+func applyRelease(db *gorm.DB, run *model.Run, mapped map[string]any) (map[string]any, string, error) {
+	merged := decodeObject(run.InputJSON)
+	if weight, ok := mapped["weight"]; ok {
+		merged["weight"] = weight
+	}
+	if abort, ok := mapped["abort"]; ok {
+		merged["abort"] = abort
+	}
+	delete(merged, "executor")
+	delete(merged, "weights")
+	delete(merged, "strategy")
+	delete(merged, "verify_url")
+	mapped = merged
+	userID := run.TriggerUserID
 	nodeID, ok := asUint(mapped["tree_node_id"])
 	if !ok {
 		return nil, "failed", fmt.Errorf("需要节点")
@@ -224,6 +241,16 @@ func applyRelease(db *gorm.DB, userID uint, mapped map[string]any) (map[string]a
 	if err != nil {
 		return nil, "failed", fmt.Errorf("这个集群上没有实例")
 	}
+	attr, err := cicd.Load(db, item.ID)
+	if err != nil {
+		return nil, "failed", err
+	}
+	if cicd.ExecutorName(attr) == "rollouts" {
+		return applyCanary(db, run, item.Name, cluster, instance, image, mapped, attr)
+	}
+	if cicd.ExecutorName(attr) != "platform" {
+		return nil, "failed", cicd.ErrExecutor
+	}
 	res := db.Model(&model.AppInstance{}).Where("id = ?", instance.ID).Update("image", image)
 	if res.Error != nil {
 		return nil, "failed", res.Error
@@ -238,6 +265,110 @@ func applyRelease(db *gorm.DB, userID uint, mapped map[string]any) (map[string]a
 		"image_tag":       image,
 		"executor":        "platform",
 	}, "success", nil
+}
+
+func applyCanary(db *gorm.DB, run *model.Run, name string, cluster model.Cluster, instance model.AppInstance, image string, mapped map[string]any, attr cicd.Attr) (map[string]any, string, error) {
+	ctx := decodeObject(run.ContextJSON)
+	previous := asString(ctx["previous_image"])
+	if previous == "" {
+		previous = instance.Image
+		ctx["previous_image"] = previous
+		raw, err := json.Marshal(ctx)
+		if err != nil {
+			return nil, "failed", err
+		}
+		if err := db.Model(run).Update("context_json", string(raw)).Error; err != nil {
+			return nil, "failed", err
+		}
+		run.ContextJSON = string(raw)
+	}
+	abort, _ := mapped["abort"].(bool)
+	from := rollouts.Current(instance.ID).Weight
+	weight := 100
+	if !abort {
+		got, ok := asUint(mapped["weight"])
+		if !ok {
+			return nil, "failed", fmt.Errorf("需要灰度百分比")
+		}
+		weight = int(got)
+	}
+	mode := "cluster"
+	shown := weight
+	if abort {
+		shown = 0
+	}
+	if config.RolloutsMock() {
+		mode = "mock"
+		rollouts.Remember(instance.ID, rollouts.Stage{Weight: shown, Image: image, Previous: previous, Aborted: abort})
+	} else {
+		liveWeight := weight
+		if abort {
+			liveWeight = 100
+		}
+		if err := rollouts.Apply(cluster.Kubeconfig, "default", name, image, instance.Replicas, liveWeight, attr.StableSeconds); err != nil {
+			return nil, "failed", err
+		}
+	}
+	if abort || weight >= 100 {
+		res := db.Model(&model.AppInstance{}).Where("id = ?", instance.ID).Update("image", image)
+		if res.Error != nil {
+			return nil, "failed", res.Error
+		}
+		if res.RowsAffected == 0 {
+			return nil, "failed", fmt.Errorf("镜像没有写上")
+		}
+	}
+	return map[string]any{
+		"executor": "rollouts", "mode": mode, "weight": shown, "from": from,
+		"target_image": image, "previous_image": previous, "stable_seconds": attr.StableSeconds,
+		"aborted": abort, "cluster": cluster.ID, "app_instance_id": instance.ID,
+	}, "waiting", nil
+}
+
+func failCanary(db *gorm.DB, run *model.Run, step *model.RunStep) error {
+	input := decodeObject(run.InputJSON)
+	itemID, _ := asUint(input["release_item_id"])
+	attr, err := cicd.Load(db, itemID)
+	if err != nil {
+		return err
+	}
+	threshold := attr.FailureThreshold
+	if threshold <= 0 {
+		threshold = 1
+	}
+	ctx := decodeObject(run.ContextJSON)
+	fails := 0
+	if n, ok := asUint(ctx["rollout_failures"]); ok {
+		fails = int(n)
+	}
+	fails++
+	ctx["rollout_failures"] = fails
+	raw, err := json.Marshal(ctx)
+	if err != nil {
+		return err
+	}
+	if err := db.Model(run).Update("context_json", string(raw)).Error; err != nil {
+		return err
+	}
+	if fails < threshold {
+		return nil
+	}
+	if attr.AutoRollback {
+		prev := asString(ctx["previous_image"])
+		out := decodeObject(step.OutputJSON)
+		if id, ok := asUint(out["app_instance_id"]); ok && prev != "" {
+			if err := db.Model(&model.AppInstance{}).Where("id = ?", id).Update("image", prev).Error; err != nil {
+				return err
+			}
+			if config.RolloutsMock() {
+				rollouts.Remember(id, rollouts.Stage{Weight: 0, Image: prev, Previous: prev, Aborted: true})
+			}
+		}
+	}
+	if err := writeStep(db, step, "failed", map[string]any{"rolled_back": attr.AutoRollback}, "灰度没有通过"); err != nil {
+		return err
+	}
+	return finishRun(db, run, "failed")
 }
 
 func callHTTP(mapped map[string]any) (map[string]any, string, error) {

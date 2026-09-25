@@ -115,7 +115,7 @@ func TestReleaseStagesAndRepublish(t *testing.T) {
 		t.Fatalf("发布项对象 = %+v", item)
 	}
 	detail := decodeJSON[itemJSON](t, getAuth(engine, fmt.Sprintf("/api/cicd/items/%d", item.ID), lin))
-	if detail.Repo != "git.local/order-api" || detail.Strategy != "manual" || detail.Executor != "" || detail.ObjectID != item.ObjectID {
+	if detail.Repo != "git.local/order-api" || detail.Strategy != "manual" || detail.Executor != "platform" || detail.ObjectID != item.ObjectID {
 		t.Fatalf("发布项详情 = %+v", detail)
 	}
 	byNode := decodeJSON[[]itemJSON](t, getAuth(engine, fmt.Sprintf("/api/cicd/items?nodeId=%d", orderNode.ID), lin))

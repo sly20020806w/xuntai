@@ -15,6 +15,7 @@ const ModelCode = "release_item"
 var (
 	ErrExecutor = errors.New("执行器还没有接上")
 	ErrBatch    = errors.New("批次名称不对")
+	ErrStrategy = errors.New("灰度百分比要从 1 到 100，并且以 100 结束")
 )
 
 var defaultStages = []string{"构建", "预发", "生产"}
@@ -25,14 +26,31 @@ var reservedStep = map[string]struct{}{
 
 // Attr 是发布项对象上的配置。执行器留空，平台不调用灰度组件。
 type Attr struct {
-	Repo      string   `json:"repo"`
-	Image     string   `json:"image"`
-	Stages    []string `json:"stages"`
-	Clusters  []uint   `json:"clusters"`
-	Batches   []string `json:"batches"`
-	Strategy  string   `json:"strategy"`
-	VerifyURL string   `json:"verify_url"`
-	Executor  string   `json:"executor"`
+	Repo             string   `json:"repo"`
+	Image            string   `json:"image"`
+	Stages           []string `json:"stages"`
+	Clusters         []uint   `json:"clusters"`
+	Batches          []string `json:"batches"`
+	Strategy         string   `json:"strategy"`
+	VerifyURL        string   `json:"verify_url"`
+	Executor         string   `json:"executor"`
+	Weights          []int    `json:"weights"`
+	StableSeconds    int      `json:"stableSeconds"`
+	FailureThreshold int      `json:"failureThreshold"`
+	AutoRollback     bool     `json:"autoRollback"`
+}
+
+// Spec 是启动剧本时从发布项读到的策略。回滚由剧本编码决定，不看入参。
+type Spec struct {
+	Executor         string
+	Strategy         string
+	Batches          []string
+	Verify           string
+	Weights          []int
+	StableSeconds    int
+	FailureThreshold int
+	AutoRollback     bool
+	Rollback         bool
 }
 
 // EnsureAll 给还没有对象的发布项补上对象和叶子关系。已有发布项和发布单保持原编号。
@@ -99,7 +117,7 @@ func Save(db *gorm.DB, item *model.DeployItem, attr Attr) error {
 	}
 	attr.Repo = item.Repo
 	attr.Image = item.ImageName
-	attr.Executor = ""
+	attr.Executor = strings.TrimSpace(attr.Executor)
 	if attr.Strategy == "" {
 		attr.Strategy = "manual"
 	}
@@ -146,15 +164,69 @@ func Load(db *gorm.DB, itemID uint) (Attr, error) {
 
 // Plan 给出要展开的批次和校验地址。批次不足两条时不展开，沿用剧本里的 confirm。
 func Plan(db *gorm.DB, itemID uint) ([]string, string, error) {
-	attr, err := Load(db, itemID)
+	spec, err := SpecFor(db, itemID)
 	if err != nil {
 		return nil, "", err
 	}
-	batches := clean(attr.Batches)
-	if len(batches) < 2 {
-		batches = nil
+	return spec.Batches, spec.Verify, nil
+}
+
+// SpecFor 从发布项对象读执行器和灰度策略。入参里的同名字段不在这里。
+func SpecFor(db *gorm.DB, itemID uint) (Spec, error) {
+	var spec Spec
+	attr, err := Load(db, itemID)
+	if err != nil {
+		return spec, err
 	}
-	return batches, strings.TrimSpace(attr.VerifyURL), nil
+	name := ExecutorName(attr)
+	if name != "platform" && name != "rollouts" {
+		return spec, ErrExecutor
+	}
+	spec.Executor = name
+	spec.Strategy = strings.TrimSpace(attr.Strategy)
+	spec.Batches = clean(attr.Batches)
+	if len(spec.Batches) < 2 {
+		spec.Batches = nil
+	}
+	spec.Verify = strings.TrimSpace(attr.VerifyURL)
+	spec.Weights = append([]int{}, attr.Weights...)
+	spec.StableSeconds = attr.StableSeconds
+	spec.FailureThreshold = attr.FailureThreshold
+	if spec.FailureThreshold <= 0 {
+		spec.FailureThreshold = 1
+	}
+	spec.AutoRollback = attr.AutoRollback
+	return spec, nil
+}
+
+// ExecutorName 空和 platform 都是现有的一次写完整镜像。
+func ExecutorName(attr Attr) string {
+	switch strings.TrimSpace(attr.Executor) {
+	case "", "platform":
+		return "platform"
+	default:
+		return strings.TrimSpace(attr.Executor)
+	}
+}
+
+// Stages 是灰度要走过的百分比。没写权重时，canary 用 10、50、100；batch 按批次均分。
+func (s Spec) Stages() []int {
+	if s.Executor != "rollouts" || s.Rollback {
+		return nil
+	}
+	if len(s.Weights) > 0 {
+		return append([]int{}, s.Weights...)
+	}
+	if s.Strategy == "batch" && len(s.Batches) > 0 {
+		n := len(s.Batches)
+		out := make([]int, n)
+		for i := range out {
+			out[i] = (i + 1) * 100 / n
+		}
+		out[n-1] = 100
+		return out
+	}
+	return []int{10, 50, 100}
 }
 
 // Validate 拒绝还没接上的执行器，以及不能当步骤名的批次。
@@ -163,8 +235,23 @@ func Validate(attr Attr) error {
 }
 
 func checkAttr(attr Attr) error {
-	if strings.TrimSpace(attr.Executor) != "" {
+	switch strings.TrimSpace(attr.Executor) {
+	case "", "platform", "rollouts":
+	default:
 		return ErrExecutor
+	}
+	if attr.StableSeconds < 0 || attr.FailureThreshold < 0 {
+		return ErrStrategy
+	}
+	if len(attr.Weights) > 0 {
+		for _, weight := range attr.Weights {
+			if weight < 1 || weight > 100 {
+				return ErrStrategy
+			}
+		}
+		if strings.TrimSpace(attr.Executor) == "rollouts" && attr.Weights[len(attr.Weights)-1] != 100 {
+			return ErrStrategy
+		}
 	}
 	seen := map[string]struct{}{}
 	for _, name := range attr.Batches {
