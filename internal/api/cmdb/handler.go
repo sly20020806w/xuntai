@@ -10,9 +10,9 @@ import (
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 
+	"xuntai/internal/access"
 	"xuntai/internal/model"
 	"xuntai/internal/scope"
-	"xuntai/internal/tree"
 )
 
 type Deps struct {
@@ -22,16 +22,16 @@ type Deps struct {
 func Register(r *gin.RouterGroup, deps Deps) {
 	h := handler{deps: deps}
 	r.GET("/models", h.listModels)
-	r.POST("/models", h.createModel)
-	r.PUT("/models/:id", h.updateModel)
-	r.DELETE("/models/:id", h.deleteModel)
+	r.POST("/models", access.ResourceCheck(deps.DB, "POST", "/api/cmdb/models", access.VerbAdmin, access.ResModel), h.createModel)
+	r.PUT("/models/:id", access.ResourceCheck(deps.DB, "PUT", "/api/cmdb/models/:id", access.VerbAdmin, access.ResModel), h.updateModel)
+	r.DELETE("/models/:id", access.ResourceCheck(deps.DB, "DELETE", "/api/cmdb/models/:id", access.VerbAdmin, access.ResModel), h.deleteModel)
 	r.GET("/objects", h.listObjects)
-	r.POST("/objects", h.createObject)
-	r.PUT("/objects/:id", h.updateObject)
-	r.DELETE("/objects/:id", h.deleteObject)
+	r.POST("/objects", access.ResourceCheck(deps.DB, "POST", "/api/cmdb/objects", access.VerbAdmin, access.ResObject), h.createObject)
+	r.PUT("/objects/:id", access.ResourceCheck(deps.DB, "PUT", "/api/cmdb/objects/:id", access.VerbAdmin, access.ResObject), h.updateObject)
+	r.DELETE("/objects/:id", access.ResourceCheck(deps.DB, "DELETE", "/api/cmdb/objects/:id", access.VerbAdmin, access.ResObject), h.deleteObject)
 	r.GET("/object-nodes", h.listLinks)
-	r.POST("/object-nodes", h.createLink)
-	r.DELETE("/object-nodes/:id", h.deleteLink)
+	r.POST("/object-nodes", access.ResourceCheck(deps.DB, "POST", "/api/cmdb/object-nodes", access.VerbAdmin, access.ResObjectNode), h.createLink)
+	r.DELETE("/object-nodes/:id", access.ResourceCheck(deps.DB, "DELETE", "/api/cmdb/object-nodes/:id", access.VerbAdmin, access.ResObjectNode), h.deleteLink)
 }
 
 type handler struct {
@@ -318,20 +318,7 @@ func (h handler) findObject(c *gin.Context) (model.CMDBObject, bool) {
 }
 
 func (h handler) ops(c *gin.Context, nodeID uint) bool {
-	ok, err := tree.CanWrite(h.deps.DB, c.GetUint("uid"), nodeID)
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		c.JSON(http.StatusNotFound, gin.H{"error": "没有这个节点"})
-		return false
-	}
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "权限核对失败"})
-		return false
-	}
-	if !ok {
-		c.JSON(http.StatusForbidden, gin.H{"error": "没有这个节点的运维权限"})
-		return false
-	}
-	return true
+	return access.Permit(c, h.deps.DB, nodeID)
 }
 
 func (h handler) ready(c *gin.Context) bool {

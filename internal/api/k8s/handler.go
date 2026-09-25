@@ -9,6 +9,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 
+	"xuntai/internal/access"
 	"xuntai/internal/model"
 	"xuntai/internal/scope"
 	"xuntai/internal/tree"
@@ -30,8 +31,8 @@ func Register(r *gin.RouterGroup, deps Deps) {
 	r.POST("/projects", h.createProject)
 	r.POST("/apps", h.createApp)
 	r.GET("/instances", h.listInstances)
-	r.POST("/instances", h.createInstance)
-	r.PUT("/instances/:id", h.updateInstance)
+	r.POST("/instances", access.ResourceCheck(deps.DB, "POST", "/api/k8s/instances", access.VerbOperate, access.ResInstance), h.createInstance)
+	r.PUT("/instances/:id", access.ResourceCheck(deps.DB, "PUT", "/api/k8s/instances/:id", access.VerbOperate, access.ResInstance), h.updateInstance)
 }
 
 type handler struct {
@@ -287,7 +288,7 @@ func (h handler) updateInstance(c *gin.Context) {
 			return
 		}
 		project, ok := h.findProject(c, app.ProjectID)
-		if !ok || !h.requireOps(c, project.TreeNodeID) {
+		if !ok || !access.Permit(c, h.deps.DB, project.TreeNodeID) {
 			return
 		}
 		c.JSON(http.StatusConflict, gin.H{"error": "生产镜像请走生产发布或回滚剧本"})
@@ -312,7 +313,7 @@ func (h handler) allowDesired(c *gin.Context, appID, clusterID, ticketID uint) b
 		return false
 	}
 	project, ok := h.findProject(c, app.ProjectID)
-	if !ok || !h.requireOps(c, project.TreeNodeID) {
+	if !ok || !access.Permit(c, h.deps.DB, project.TreeNodeID) {
 		return false
 	}
 	var cluster model.Cluster

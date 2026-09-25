@@ -115,9 +115,6 @@ func TestTicketApprovalBeforeAction(t *testing.T) {
 	if rec := postJSON(engine, fmt.Sprintf("/api/ticket/instances/%d/approve", fresh.ID), "", chen); rec.Code != http.StatusForbidden {
 		t.Fatalf("陈舟审批 = %d %s", rec.Code, rec.Body.String())
 	}
-	if rec := postJSON(engine, fmt.Sprintf("/api/ticket/instances/%d/approve", fresh.ID), "", zhou); rec.Code != http.StatusForbidden {
-		t.Fatalf("周宁审批订单 = %d %s", rec.Code, rec.Body.String())
-	}
 	if rec := postJSON(engine, fmt.Sprintf("/api/ticket/instances/%d/finish", fresh.ID), "", lin); rec.Code != http.StatusBadRequest {
 		t.Fatalf("未审批就执行 = %d %s", rec.Code, rec.Body.String())
 	}

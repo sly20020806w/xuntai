@@ -88,7 +88,7 @@ func TestReleaseStagesAndRepublish(t *testing.T) {
 		t.Fatal("许衡看见了订单发布")
 	}
 	confirmPath := fmt.Sprintf("/api/cicd/orders/%d/confirm", waiting.ID)
-	if rec := postJSON(engine, confirmPath, "", zhou); rec.Code != http.StatusForbidden {
+	if rec := postJSON(engine, confirmPath, "", zhou); rec.Code != http.StatusConflict {
 		t.Fatalf("周宁确认 = %d %s", rec.Code, rec.Body.String())
 	}
 	if rec := postJSON(engine, confirmPath, "", chen); rec.Code != http.StatusForbidden {
@@ -107,7 +107,7 @@ func TestReleaseStagesAndRepublish(t *testing.T) {
 	nodes := decodeNodes(t, getAuth(engine, "/api/tree/nodes", lin))
 	orderNode := mustNode(t, nodes, "订单")
 	trade := mustNode(t, nodes, "交易")
-	if rec := postJSON(engine, "/api/cicd/items", fmt.Sprintf(`{"name":"越权项","treeNodeId":%d}`, orderNode.ID), zhou); rec.Code != http.StatusForbidden {
+	if rec := postJSON(engine, "/api/cicd/items", fmt.Sprintf(`{"name":"越权项","treeNodeId":%d}`, orderNode.ID), zhou); rec.Code != http.StatusOK {
 		t.Fatalf("周宁建发布项 = %d %s", rec.Code, rec.Body.String())
 	}
 	if rec := postJSON(engine, "/api/cicd/items", fmt.Sprintf(`{"name":"父节点项","treeNodeId":%d}`, trade.ID), lin); rec.Code != http.StatusBadRequest {

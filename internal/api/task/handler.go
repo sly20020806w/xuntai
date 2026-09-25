@@ -9,6 +9,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 
+	"xuntai/internal/access"
 	"xuntai/internal/model"
 	"xuntai/internal/scope"
 	taskcore "xuntai/internal/task"
@@ -27,7 +28,7 @@ func Register(r *gin.RouterGroup, deps Deps) {
 	r.GET("/scripts", h.listScripts)
 	r.POST("/scripts", h.createScript)
 	r.GET("/jobs", h.listJobs)
-	r.POST("/jobs", h.createJob)
+	r.POST("/jobs", access.ResourceCheck(deps.DB, "POST", "/api/task/jobs", access.VerbOperate, access.ResTaskJob), h.createJob)
 	r.POST("/jobs/:id/pause", h.pause)
 	r.POST("/jobs/:id/resume", h.resume)
 	r.POST("/jobs/:id/results", h.report)
@@ -177,7 +178,7 @@ func (h handler) createJob(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "需要任务名"})
 		return
 	}
-	if !h.requireOps(c, body.TreeNodeID) {
+	if !access.Permit(c, h.deps.DB, body.TreeNodeID) {
 		return
 	}
 	job, err := taskcore.Open(h.deps.DB, strings.TrimSpace(body.Name), body.ScriptID, body.TreeNodeID, body.BatchSize, body.Hosts)

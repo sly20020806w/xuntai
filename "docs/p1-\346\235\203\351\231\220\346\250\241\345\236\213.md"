@@ -1,0 +1,41 @@
+# 权限模型
+
+写操作固定两步：先过 JWT 和 Casbin（角色能否调用这条接口），再核资源归属（目标是否落在当前用户能管的服务树上）。列表接口仍只做原来的收窄，不套这层归属校验。
+
+平台管理员在归属这一步直接通过。其他人沿服务树向上找运维负责人，链上有自己才放行。研发负责人不能写。资源没有节点时拒绝，错误是「资源未挂载到服务树，无法校验归属」。
+
+动词只允许这四个，定义在 `internal/access/perm.go`：
+
+| 动词 | 含义 |
+|---|---|
+| view | 查看。列表不强制走归属校验 |
+| operate | 执行变更，例如改实例、确认阶段、下发任务、驳回、继续或取消执行 |
+| approve | 审批。工单审批用这个动词 |
+| admin | 管理资源本身，例如模型、对象、发布项的增删改 |
+
+`resource_type` 也只在这个文件里声明：`tree`、`model`、`object`、`object_node`、`instance`、`release_item`、`ticket`、`playbook_run`、`task_job`。路由注册时写上动词和类型，不从请求体里信任调用方自称的类型。节点或对象编号仍从原有路径、请求体里取。
+
+## 接入清单
+
+| 接口 | 动词 | 资源 | 无节点运维 | 有节点运维 | 平台管理员 |
+|---|---|---|---|---|---|
+| POST /api/ticket/instances/:id/approve | approve | ticket | 403 | 通过（不能批自己的） | 直过 |
+| POST /api/ticket/instances/:id/reject | operate | ticket | 403 | 通过 | 直过 |
+| POST /api/ticket/instances/:id/finish | operate | ticket | 403 | 通过 | 直过 |
+| POST /api/playbook/runs | operate | playbook_run | 403 | 通过 | 直过 |
+| POST /api/playbook/runs/:id/continue | operate | playbook_run | 403 | 通过 | 直过 |
+| POST /api/playbook/runs/:id/cancel | operate | playbook_run | 403 | 通过 | 直过 |
+| POST /api/playbook/runs/:id/retry | operate | playbook_run | 403 | 通过 | 直过 |
+| POST /api/playbook/runs/:id/sync | operate | playbook_run | 403 | 通过 | 直过 |
+| POST /api/k8s/instances | operate | instance | 403 | 通过。生产环境随后仍是 409，不写镜像 | 直过归属，生产仍 409 |
+| PUT /api/k8s/instances/:id | operate | instance | 403 | 开发环境通过；生产 409 | 直过归属，生产仍 409 |
+| POST/PUT/DELETE /api/cmdb/models | admin | model | 403，模型不挂树 | 同左 | 直过 |
+| POST/PUT/DELETE /api/cmdb/objects | admin | object | 403 | 通过 | 直过 |
+| POST/DELETE /api/cmdb/object-nodes | admin | object_node | 403 | 通过 | 直过 |
+| POST /api/cicd/items | admin | release_item | 403 | 通过 | 直过 |
+| POST /api/cicd/orders/:id/confirm | operate | release_item | 403 | 构建、预发通过；生产阶段 409 | 直过归属，生产仍 409 |
+| POST /api/task/jobs | operate | task_job | 403 | 通过 | 直过 |
+
+剧本没有单独的暂停接口。执行停住来自人工等待或未审批关卡，恢复走继续。任务的暂停、恢复和结果回写仍用原来的节点运维判断，不在上表。
+
+提交工单、新建发布单、服务树、告警、数据库这些写接口保持原样。生产镜像仍只允许剧本 `k8s_apply` 修改。同一幂等键的未结束 Run 仍返回 409。工单审批通过后仍只创建 Run，不在审批接口里改镜像。

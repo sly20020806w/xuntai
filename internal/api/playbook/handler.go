@@ -9,6 +9,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 
+	"xuntai/internal/access"
 	"xuntai/internal/model"
 	playcore "xuntai/internal/playbook"
 	"xuntai/internal/scope"
@@ -23,12 +24,12 @@ func Register(r *gin.RouterGroup, deps Deps) {
 	r.GET("/playbooks", h.listBooks)
 	r.GET("/playbooks/:id", h.getBook)
 	r.GET("/runs", h.listRuns)
-	r.POST("/runs", h.start)
+	r.POST("/runs", access.ResourceCheck(deps.DB, "POST", "/api/playbook/runs", access.VerbOperate, access.ResPlaybookRun), h.start)
 	r.GET("/runs/:id", h.getRun)
-	r.POST("/runs/:id/continue", h.continueRun)
-	r.POST("/runs/:id/cancel", h.cancel)
-	r.POST("/runs/:id/retry", h.retry)
-	r.POST("/runs/:id/sync", h.sync)
+	r.POST("/runs/:id/continue", access.ResourceCheck(deps.DB, "POST", "/api/playbook/runs/:id/continue", access.VerbOperate, access.ResPlaybookRun), h.continueRun)
+	r.POST("/runs/:id/cancel", access.ResourceCheck(deps.DB, "POST", "/api/playbook/runs/:id/cancel", access.VerbOperate, access.ResPlaybookRun), h.cancel)
+	r.POST("/runs/:id/retry", access.ResourceCheck(deps.DB, "POST", "/api/playbook/runs/:id/retry", access.VerbOperate, access.ResPlaybookRun), h.retry)
+	r.POST("/runs/:id/sync", access.ResourceCheck(deps.DB, "POST", "/api/playbook/runs/:id/sync", access.VerbOperate, access.ResPlaybookRun), h.sync)
 }
 
 type handler struct {

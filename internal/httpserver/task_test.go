@@ -80,7 +80,8 @@ func TestTaskBatchAndUniqueHost(t *testing.T) {
 	if rec := postJSON(engine, "/api/task/jobs", body, chen); rec.Code != http.StatusForbidden {
 		t.Fatalf("陈舟下发 = %d %s", rec.Code, rec.Body.String())
 	}
-	if rec := postJSON(engine, "/api/task/jobs", body, zhou); rec.Code != http.StatusForbidden {
+	zhouBody := fmt.Sprintf(`{"name":"周宁直过对时","scriptId":%d,"treeNodeId":%d,"batchSize":1}`, scriptID, order.ID)
+	if rec := postJSON(engine, "/api/task/jobs", zhouBody, zhou); rec.Code != http.StatusOK {
 		t.Fatalf("周宁下发订单 = %d %s", rec.Code, rec.Body.String())
 	}
 	foreign := fmt.Sprintf(`{"name":"串节点","scriptId":%d,"treeNodeId":%d,"batchSize":1,"hosts":["10.4.1.21"]}`, scriptID, order.ID)

@@ -9,6 +9,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 
+	"xuntai/internal/access"
 	cicdcore "xuntai/internal/cicd"
 	"xuntai/internal/model"
 	"xuntai/internal/scope"
@@ -25,10 +26,10 @@ func Register(r *gin.RouterGroup, deps Deps) {
 		c.JSON(200, gin.H{"module": "cicd"})
 	})
 	r.GET("/items", h.listItems)
-	r.POST("/items", h.createItem)
+	r.POST("/items", access.ResourceCheck(deps.DB, "POST", "/api/cicd/items", access.VerbAdmin, access.ResReleaseItem), h.createItem)
 	r.GET("/orders", h.listOrders)
 	r.POST("/orders", h.createOrder)
-	r.POST("/orders/:id/confirm", h.confirm)
+	r.POST("/orders/:id/confirm", access.ResourceCheck(deps.DB, "POST", "/api/cicd/orders/:id/confirm", access.VerbOperate, access.ResReleaseItem), h.confirm)
 }
 
 type handler struct {
@@ -79,7 +80,7 @@ func (h handler) createItem(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "没有这个节点"})
 		return
 	}
-	if !h.requireOps(c, node.ID) {
+	if !access.Permit(c, h.deps.DB, node.ID) {
 		return
 	}
 	if !node.IsLeaf {
@@ -193,7 +194,7 @@ func (h handler) confirm(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "没有这个发布项"})
 		return
 	}
-	if !h.requireOps(c, item.TreeNodeID) {
+	if !access.Permit(c, h.deps.DB, item.TreeNodeID) {
 		return
 	}
 	if err := cicdcore.Confirm(h.deps.DB, order.ID); err != nil {

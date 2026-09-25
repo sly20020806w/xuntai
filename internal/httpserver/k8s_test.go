@@ -130,7 +130,7 @@ func TestClusterRecordAndProdTicket(t *testing.T) {
 		t.Fatal("没有待审批的订单工单")
 	}
 	body := fmt.Sprintf(`{"image":"order-api:1.8.4","replicas":6,"ticketId":%d}`, ticketID)
-	if rec := putJSON(engine, fmt.Sprintf("/api/k8s/instances/%d", prod.ID), body, zhou); rec.Code != http.StatusForbidden {
+	if rec := putJSON(engine, fmt.Sprintf("/api/k8s/instances/%d", prod.ID), body, zhou); rec.Code != http.StatusConflict {
 		t.Fatalf("周宁改生产镜像 = %d %s", rec.Code, rec.Body.String())
 	}
 	if rec := putJSON(engine, fmt.Sprintf("/api/k8s/instances/%d", prod.ID), body, chen); rec.Code != http.StatusForbidden {

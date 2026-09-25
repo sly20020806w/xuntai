@@ -35,6 +35,7 @@ import (
 func TestCMDBObjectsKeepHostBinding(t *testing.T) {
 	engine, db := playEngine(t)
 	lin := loginName(t, engine, "林夏", "secret")
+	zhou := loginName(t, engine, "周宁", "secret")
 	xu := loginName(t, engine, "许衡", "secret")
 	nodes := decodeNodes(t, getAuth(engine, "/api/tree/nodes", lin))
 	order := mustNode(t, nodes, "订单")
@@ -45,7 +46,7 @@ func TestCMDBObjectsKeepHostBinding(t *testing.T) {
 		t.Fatalf("订单机器 = %d", len(before))
 	}
 
-	created := postJSON(engine, "/api/cmdb/models", `{"name":"配置项","code":"ci","remark":"静态"}`, lin)
+	created := postJSON(engine, "/api/cmdb/models", `{"name":"配置项","code":"ci","remark":"静态"}`, zhou)
 	if created.Code != http.StatusOK {
 		t.Fatalf("建模型 = %d %s", created.Code, created.Body.String())
 	}
@@ -89,7 +90,7 @@ func TestCMDBObjectsKeepHostBinding(t *testing.T) {
 	if rec := deleteJSON(engine, fmt.Sprintf("/api/cmdb/objects/%d", objectID), lin); rec.Code != http.StatusOK {
 		t.Fatalf("删对象 = %d %s", rec.Code, rec.Body.String())
 	}
-	if rec := deleteJSON(engine, fmt.Sprintf("/api/cmdb/models/%d", modelID), lin); rec.Code != http.StatusOK {
+	if rec := deleteJSON(engine, fmt.Sprintf("/api/cmdb/models/%d", modelID), zhou); rec.Code != http.StatusOK {
 		t.Fatalf("删模型 = %d %s", rec.Code, rec.Body.String())
 	}
 	_ = db

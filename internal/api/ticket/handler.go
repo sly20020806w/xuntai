@@ -10,6 +10,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 
+	"xuntai/internal/access"
 	"xuntai/internal/model"
 	"xuntai/internal/playbook"
 	"xuntai/internal/scope"
@@ -28,9 +29,9 @@ func Register(r *gin.RouterGroup, deps Deps) {
 	r.GET("/templates", h.listTemplates)
 	r.GET("/instances", h.listInstances)
 	r.POST("/instances", h.createInstance)
-	r.POST("/instances/:id/approve", h.approve)
-	r.POST("/instances/:id/reject", h.reject)
-	r.POST("/instances/:id/finish", h.finish)
+	r.POST("/instances/:id/approve", access.ResourceCheck(deps.DB, "POST", "/api/ticket/instances/:id/approve", access.VerbApprove, access.ResTicket), h.approve)
+	r.POST("/instances/:id/reject", access.ResourceCheck(deps.DB, "POST", "/api/ticket/instances/:id/reject", access.VerbOperate, access.ResTicket), h.reject)
+	r.POST("/instances/:id/finish", access.ResourceCheck(deps.DB, "POST", "/api/ticket/instances/:id/finish", access.VerbOperate, access.ResTicket), h.finish)
 }
 
 type handler struct {
@@ -190,17 +191,7 @@ func (h handler) move(c *gin.Context, from, to, step string, blockApplicant bool
 	if !ok {
 		return
 	}
-	allowed, err := tree.CanWrite(h.deps.DB, c.GetUint("uid"), row.TreeNodeID)
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		c.JSON(http.StatusNotFound, gin.H{"error": "没有这个节点"})
-		return
-	}
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "权限核对失败"})
-		return
-	}
-	if !allowed {
-		c.JSON(http.StatusForbidden, gin.H{"error": "没有这个节点的运维权限"})
+	if !access.Permit(c, h.deps.DB, row.TreeNodeID) {
 		return
 	}
 	if blockApplicant && row.ApplicantID == c.GetUint("uid") {
@@ -212,7 +203,7 @@ func (h handler) move(c *gin.Context, from, to, step string, blockApplicant bool
 		return
 	}
 	var runID uint
-	err = h.deps.DB.Transaction(func(tx *gorm.DB) error {
+	err := h.deps.DB.Transaction(func(tx *gorm.DB) error {
 		updates := map[string]any{"status": to, "current_node": step}
 		if to == "pending_action" {
 			now := time.Now().UTC()

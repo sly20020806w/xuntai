@@ -11,9 +11,9 @@ import (
 
 	"gorm.io/gorm"
 
+	"xuntai/internal/access"
 	"xuntai/internal/model"
 	"xuntai/internal/task"
-	"xuntai/internal/tree"
 )
 
 // TaskMock 只在测试或本地打开。生产不设置时，巡检一直等到真实代理回写。
@@ -265,14 +265,17 @@ func callHTTP(mapped map[string]any) (map[string]any, string, error) {
 }
 
 func mustWrite(db *gorm.DB, userID, nodeID uint) error {
-	ok, err := tree.CanWrite(db, userID, nodeID)
-	if err != nil {
-		return err
+	err := access.Allow(db, userID, nodeID)
+	if err == nil {
+		return nil
 	}
-	if !ok {
+	if errors.Is(err, access.ErrDenied) || errors.Is(err, access.ErrUnmounted) {
 		return ErrForbidden
 	}
-	return nil
+	if errors.Is(err, access.ErrNodeAbsent) {
+		return fmt.Errorf("没有这个节点")
+	}
+	return err
 }
 
 func hostIPs(db *gorm.DB, ids []uint) ([]string, map[string]uint, error) {
