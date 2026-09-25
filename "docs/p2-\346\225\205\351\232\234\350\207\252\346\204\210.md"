@@ -35,7 +35,9 @@
 - `fingerprint`
 - `summary`（来自 webhook 的 `summary`，可空）
 
-模板是一个 JSON 对象。可用占位符只有 `{{tree_node_id}}`、`{{object_id}}`、`{{rule_name}}`、`{{fingerprint}}`、`{{summary}}`。某一项的值整段正好是 `{{tree_node_id}}` 或 `{{object_id}}` 时，写入数字；写在句子里时，换成文字。其它 `{{...}}` 在保存时拒绝。模板不是对象也拒绝。
+模板是一个 JSON 对象。可用占位符只有 `{{tree_node_id}}`、`{{object_id}}`、`{{rule_name}}`、`{{fingerprint}}`、`{{summary}}`。某一项的值整段正好是 `{{tree_node_id}}` 或 `{{object_id}}` 时，写入数字；写在句子里时，换成文字。
+
+这五个占位符在创建和修改规则时校验。多出来的 `{{...}}`，或模板不是 JSON 对象，接口直接拒绝，规则不会写进库。不会把脏模板存下来，等到告警触发才失败。
 
 合并之后，上面五项以这次告警为准，模板改不了。模板里的其它字段会保留。例如：
 
@@ -49,7 +51,7 @@
 
 沿用剧本现有幂等：同一个剧本、同一个幂等键，已有未结束的 Run（`pending` / `running` / `paused`）时不再启动。
 
-Webhook 遇到这种情况仍返回 200，`started` 为 false，并带上已有的 `runId`。不把整次 webhook 变成 409，负责人查找仍然成功。剧本自己的启动接口碰到同样的键，仍是 409。
+Webhook 遇到这种情况仍返回 200，`started` 为 false，并带上已有的 `runId`。不把整次 webhook 变成 409，负责人查找仍然成功。响应里仍有负责人和这次未结束的 Run。告警没有被丢掉，只是不为同一条未结束的处理再开一次 Run。剧本自己的启动接口碰到同样的键，仍是 409。
 
 Run 到 `success`、`failed` 或 `cancelled` 之后，同一指纹可以再启动一次。会新开一条 Run，并再记一条自愈记录。
 
